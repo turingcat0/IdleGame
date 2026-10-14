@@ -1,0 +1,449 @@
+local GameManager    = require("GameManager")
+local SkillType      = require("Gameplay.Skills.SkillType")
+local Skills         = require("Gameplay.Skills.Skills")
+local AttributeType  = require("Gameplay.Stats.AttributeType")
+local Descriptions   = require("Config.Generated.Descriptions")
+
+--- 需要的节点结构（槽位为手工放置的 Prefabs/SkillSlot 预制体实例）：
+--- SkillWindow (Canvas + LuaBehaviour)
+--- └ Background/WindowPanel
+---    ├ CloseButton              (Button)
+---    ├ SlotsPanel/SlotNormal    (SkillSlot: Button + Image，子节点 Icon/Image、Name/Desc TMP、Locked TMP)
+---    ├ SlotsPanel/SlotCombat     (SkillSlot)
+---    ├ SlotsPanel/SlotSiganature1..3 (SkillSlot，签名槽；注意场景里拼写为 Siganature)
+---    ├ DetailCard/Detail         (TMP 文本，显示选中技能的详情)
+---    ├ ScrollView/Viewport/Content  (列表容器，运行时用 Prefabs/SkillListItem 填充)
+--- Prefabs/SkillListItem: 自身带 Button + Image，子节点 Name / Info 为 TMP 文本
+--- 技能图标约定路径：Textures/Skills/<skill.id>，运行时 Resources.Load 读取
+--- 注：当前实际层级见下（上方旧结构注释已过时，以代码为准）：
+--- Background/TopBar/CloseButton；WindowPanel 下含 ScrollView/Viewport/Content、
+--- SlotsPanel/{SlotNormal,SlotCombat,SlotSiganature1..3,LabelNormal,LabelCombat,LabelSignature}、MySkillsLabel
+--- 点击装备槽 → 列表按槽位类型过滤（currentFilter）；DetailCard 已移除
+
+---@type CS.UnityEngine.MonoBehaviour
+local self = self
+
+local listContent = nil
+local currentFilter = nil
+local slotViews = {}
+local listItems = {}
+local listBuilt = false
+local selectedId = nil
+local unlockedIds = {}   -- 记录当前已解锁的技能 id
+local mySkillsLabel = nil
+local baseTitle = ""     -- 标题原文，追加过滤类型名时作前缀
+
+-- SkillSlot 预制体自身底色，列表项脱离锁定态时用它复位
+local itemNormalColor = nil
+
+local ItemColors = {
+    locked = { r = 0.25, g = 0.25, b = 0.25, a = 1 },
+}
+
+local TypeNames = {
+    [SkillType.Normal] = "普通",
+    [SkillType.Combat] = "战斗",
+    [SkillType.Signature] = "掌控",
+}
+
+--- 槽位类型字符串 → SkillType，用于列表过滤
+local SlotSkillType = {
+    normal = SkillType.Normal,
+    combat = SkillType.Combat,
+    signature = SkillType.Signature,
+}
+
+local function GetPlayer()
+    return GameManager.player
+end
+
+local function SafeFind(path, expectedType)
+    local obj = self.transform:Find(path)
+    if not obj then
+        error("[SkillWindow] 找不到节点: " .. path)
+    end
+    if expectedType then
+        local comp = obj:GetComponent(expectedType)
+        if not comp then
+            error("[SkillWindow] 节点 " .. path .. " 缺少组件: " .. tostring(expectedType))
+        end
+        return comp
+    end
+    return obj
+end
+
+local function SetText(parent, path, text)
+    local node = parent:Find(path)
+    if not node then return end
+    local tmp = node:GetComponent(typeof(CS.TMPro.TextMeshProUGUI))
+    if tmp then
+        tmp.text = text
+    end
+end
+
+local function SetColor(go, color)
+    local img = go:GetComponent(typeof(CS.UnityEngine.UI.Image))
+    if img then
+        img.color = CS.UnityEngine.Color(color.r, color.g, color.b, color.a)
+    end
+end
+
+---按约定路径 Textures/Skills/<skillId> 运行时加载技能图标到指定 Image
+---@param image CS.UnityEngine.UI.Image?
+---@param skillId string
+local function SetSkillIcon(image, skillId)
+    if not image then return end
+    local sprite = CS.UnityEngine.Resources.Load("Textures/Skills/" .. skillId, typeof(CS.UnityEngine.Sprite))
+    if sprite then
+        image.sprite = sprite
+        image.enabled = true
+    else
+        image.enabled = false
+    end
+end
+
+---读取技能描述（Descriptions 表 category=skill）
+---@param skillId string
+---@return string
+local function GetSkillDesc(skillId)
+    local entry = Descriptions[skillId]
+    if entry and entry.description then
+        return entry.description
+    end
+    return ""
+end
+
+---获取当前装备在指定槽位的技能
+---@param player Player
+---@param slotType string
+---@param index integer
+---@return Skill?
+local function GetEquippedSkill(player, slotType, index)
+    if slotType == "normal" then
+        return player.normalSkill
+    elseif slotType == "combat" then
+        return player.combatSkill
+    elseif slotType == "signature" then
+        return player.signatureSkills[index]
+    end
+    return nil
+end
+
+---@param skill Skill
+---@return string
+local function DescribeSkill(skill)
+    if not skill then return "选择一个技能" end
+    local typeName = TypeNames[skill.skillType] or "未知"
+    local manaCost = skill:Get(AttributeType.ManaCost)
+    local manaText
+    if manaCost > 0 then
+        manaText = string.format("消耗 %d", manaCost)
+    elseif manaCost < 0 then
+        manaText = string.format("回复 %d", -manaCost)
+    else
+        manaText = "无消耗"
+    end
+    return string.format(
+        "%s\n类型: %s  解锁: Lv%d\n倍率 %.1f  射程 %.1f\n%s\n冷却 %.1f  演出 %.2f",
+        skill.name,
+        typeName,
+        skill.unlockLevel or 1,
+        skill:Get(AttributeType.AttackMultiplier),
+        skill:Get(AttributeType.AttackRange),
+        manaText,
+        skill.cooldown,
+        skill.duration
+    )
+end
+
+---@param slotType string
+---@param index integer
+local function OnSlotClicked(slotType, index)
+    local player = GetPlayer()
+    local maxSlots = player:GetSignatureSlotCount()
+
+    -- 点击装备槽 → 列表过滤为该类型技能
+    currentFilter = slotType
+    -- 选中技能若与该类型不符则清除，避免跨类型残留选中
+    if selectedId then
+        local sk = Skills[selectedId]
+        if not sk or sk.skillType ~= SlotSkillType[slotType] then
+            selectedId = nil
+        end
+    end
+
+    -- Signature 锁定槽位：仅过滤，不可装备
+    if slotType == "signature" and index > maxSlots then
+        Refresh()
+        return
+    end
+
+    local skill = selectedId and Skills[selectedId] or nil
+    if skill and skill.skillType ~= SlotSkillType[slotType] then
+        skill = nil
+    end
+
+    -- 点击已装备的技能 = 卸下；否则装备
+    local current = GetEquippedSkill(player, slotType, index)
+    if current and skill and current.id == skill.id then
+        player:EquipSkill(slotType, index, nil)
+    elseif skill then
+        player:EquipSkill(slotType, index, skill)
+    end
+    Refresh()
+end
+
+---@param id string
+local function OnItemClicked(id)
+    if not unlockedIds[id] then return end
+    selectedId = id
+    Refresh()
+end
+
+local function BuildList()
+    if not listContent then return end
+
+    -- 清掉旧列表项
+    for _, go in pairs(listItems) do
+        CS.UnityEngine.Object.Destroy(go)
+    end
+    listItems = {}
+
+    local prefab = CS.UnityEngine.Resources.Load("Prefabs/SkillSlot", typeof(CS.UnityEngine.GameObject))
+    if not prefab then
+        error("[SkillWindow] 找不到 Prefabs/SkillSlot")
+    end
+
+    local player = GetPlayer()
+
+    -- 收集已解锁技能 id
+    unlockedIds = {}
+    for _, st in ipairs({ SkillType.Normal, SkillType.Combat, SkillType.Signature }) do
+        for _, skill in ipairs(player:GetUnlockedSkills(st)) do
+            unlockedIds[skill.id] = true
+        end
+    end
+
+    -- 收集所有玩家技能（包括未解锁），按类型、解锁等级排序
+    local allSkills = {}
+    for id, skill in pairs(Skills) do
+        if string.sub(id, 1, 7) == "player_" then
+            table.insert(allSkills, skill)
+        end
+    end
+    table.sort(allSkills, function(a, b)
+        if a.skillType ~= b.skillType then
+            return a.skillType < b.skillType
+        end
+        return (a.unlockLevel or 0) < (b.unlockLevel or 0)
+    end)
+
+    for _, skill in ipairs(allSkills) do
+        local go = CS.UnityEngine.Object.Instantiate(prefab, listContent)
+        go.name = "SkillItem_" .. skill.id
+        if not itemNormalColor then
+            -- 刚实例化、尚未被 Refresh 染色，此时取到的才是预制体原色
+            local img = go:GetComponent(typeof(CS.UnityEngine.UI.Image))
+            if img then itemNormalColor = img.color end
+        end
+        local button = go:GetComponent(typeof(CS.UnityEngine.UI.Button))
+        if button then
+            local id = skill.id
+            button.onClick:AddListener(function() OnItemClicked(id) end)
+        end
+        listItems[skill.id] = go
+    end
+    listBuilt = true
+end
+
+function Refresh()
+    local player = GetPlayer()
+    local maxSlots = player:GetSignatureSlotCount()
+
+    -- 槽位显示（SkillSlot 预制体：Icon / Name / Desc / Locked）
+    for _, slotType in ipairs({ "normal", "combat", "signature" }) do
+        local maxIdx = (slotType == "signature") and 3 or 1
+        for index = 1, maxIdx do
+            local key = slotType .. index
+            local view = slotViews[key]
+            if view then
+                local locked = (slotType == "signature" and index > maxSlots)
+                local current = not locked and GetEquippedSkill(player, slotType, index) or nil
+                if locked then
+                    if view.locked then view.locked:SetActive(true) end
+                    if view.icon then view.icon.enabled = false end
+                    if view.name then view.name.text = "" end
+                    if view.desc then view.desc.text = "" end
+                    SetColor(view.button.gameObject, ItemColors.locked)
+                    view.button.interactable = false
+                else
+                    if view.locked then view.locked:SetActive(false) end
+                    -- 未锁定槽位恢复预制体自身颜色，避免解锁后仍残留锁定灰色
+                    if view.originalColor then
+                        SetColor(view.button.gameObject, view.originalColor)
+                    end
+                    view.button.interactable = true
+                    if current then
+                        SetSkillIcon(view.icon, current.id)
+                        if view.name then view.name.text = current.name end
+                        if view.desc then view.desc.text = GetSkillDesc(current.id) end
+                    else
+                        if view.icon then view.icon.enabled = false end
+                        if view.name then view.name.text = "空" end
+                        if view.desc then view.desc.text = "" end
+                    end
+                end
+            end
+        end
+    end
+
+    -- 列表项显示（按当前过滤类型 currentFilter 显隐；现在用 SkillSlot 预制体）
+    local filterType = currentFilter and SlotSkillType[currentFilter] or nil
+
+    -- 标题跟随当前过滤类型，未过滤时回到原文
+    if mySkillsLabel then
+        local filterName = filterType and TypeNames[filterType] or nil
+        mySkillsLabel.text = filterName and (baseTitle .. " · " .. filterName) or baseTitle
+    end
+
+    for id, go in pairs(listItems) do
+        local skill = Skills[id]
+        if skill then
+            local visible = (not filterType) or skill.skillType == filterType
+            go:SetActive(visible)
+            local isUnlocked = unlockedIds[id]
+            local button = go:GetComponent(typeof(CS.UnityEngine.UI.Button))
+            if button then button.interactable = isUnlocked end
+
+            SetText(go.transform, "Name", skill.name)
+            local iconTf = go.transform:Find("Icon")
+            local iconImg = iconTf and iconTf:GetComponent(typeof(CS.UnityEngine.UI.Image)) or nil
+            SetSkillIcon(iconImg, id)
+
+            -- 选中态由 Selected 深色背景表示：每项都要显式设一次，
+            -- 只在选中时开、不在落选时关会让旧选中永久残留
+            local selectedTf = go.transform:Find("Selected")
+            if selectedTf then
+                selectedTf.gameObject:SetActive(id == selectedId)
+            end
+
+            local typeName = TypeNames[skill.skillType] or ""
+            if isUnlocked then
+                -- 描述：优先用 Descriptions 表，否则显示类型/等级/装备状态
+                local equippedSlot = ""
+                if player.normalSkill and player.normalSkill.id == id then
+                    equippedSlot = " · 已装备"
+                elseif player.combatSkill and player.combatSkill.id == id then
+                    equippedSlot = " · 已装备"
+                else
+                    for i, sigSkill in ipairs(player.signatureSkills) do
+                        if sigSkill.id == id then
+                            equippedSlot = string.format(" · 已装备·槽%d", i)
+                            break
+                        end
+                    end
+                end
+                local desc = GetSkillDesc(id)
+                if desc == "" then
+                    desc = typeName .. " · Lv" .. (skill.unlockLevel or 1) .. equippedSlot
+                end
+                SetText(go.transform, "Desc", desc)
+                -- 解锁后复位底色，避免残留锁定灰
+                if itemNormalColor then
+                    SetColor(go, itemNormalColor)
+                end
+            else
+                SetText(go.transform, "Desc", "未解锁 · Lv" .. (skill.unlockLevel or 1))
+                SetColor(go, ItemColors.locked)
+            end
+        end
+    end
+
+end
+
+function Awake()
+    listContent = SafeFind("Background/WindowPanel/ScrollView/Viewport/Content")
+
+    -- 标题纯装饰，缺失不该阻断窗口打开，故不用 SafeFind
+    local titleTf = self.transform:Find("Background/WindowPanel/MySkillsLabel")
+    if titleTf then
+        mySkillsLabel = titleTf:GetComponent(typeof(CS.TMPro.TextMeshProUGUI))
+        if mySkillsLabel then
+            baseTitle = mySkillsLabel.text
+        end
+    end
+
+    local closeButton = SafeFind("Background/TopBar/CloseButton", typeof(CS.UnityEngine.UI.Button))
+    if closeButton then
+        closeButton.onClick:AddListener(Hide)
+    end
+
+    -- 绑定槽位按钮（槽位已是 Prefabs/SkillSlot 预制体实例，含 Icon/Name/Desc/Locked 子节点）
+    local function BindSlot(slotType, prefix, count)
+        for index = 1, count do
+            local key = slotType .. index
+            -- 单槽位（normal/combat）节点名无序号，多槽位（signature）带序号
+            local path = count == 1
+                and string.format("Background/WindowPanel/SlotsPanel/%s", prefix)
+                or  string.format("Background/WindowPanel/SlotsPanel/%s%d", prefix, index)
+            local btn = SafeFind(path, typeof(CS.UnityEngine.UI.Button))
+            if btn then
+                local tf = btn.transform
+                local iconTf = tf:Find("Icon")
+                local nameTf = tf:Find("Name")
+                local descTf = tf:Find("Desc")
+                local lockedTf = tf:Find("Locked")
+                local slotImg = btn:GetComponent(typeof(CS.UnityEngine.UI.Image))
+                -- SkillSlot 预制体被装备槽和列表项共用，装备槽不参与选中态
+                local selectedTf = tf:Find("Selected")
+                if selectedTf then
+                    selectedTf.gameObject:SetActive(false)
+                end
+                slotViews[key] = {
+                    button = btn,
+                    icon   = iconTf and iconTf:GetComponent(typeof(CS.UnityEngine.UI.Image)) or nil,
+                    name   = nameTf and nameTf:GetComponent(typeof(CS.TMPro.TextMeshProUGUI)) or nil,
+                    desc   = descTf and descTf:GetComponent(typeof(CS.TMPro.TextMeshProUGUI)) or nil,
+                    locked = lockedTf and lockedTf.gameObject or nil,
+                    originalColor = slotImg and slotImg.color or nil,
+                }
+                local st, idx = slotType, index
+                btn.onClick:AddListener(function() OnSlotClicked(st, idx) end)
+            end
+        end
+    end
+
+    BindSlot("normal", "SlotNormal", 1)
+    BindSlot("combat", "SlotCombat", 1)
+    -- 注意：场景里签名槽节点名拼写为 SlotSiganature（缺少 n），与预制体实例名保持一致
+    BindSlot("signature", "SlotSiganature", 3)
+end
+
+function Start()
+    local canvas = self:GetComponent(typeof(CS.UnityEngine.Canvas))
+    if canvas then
+        canvas.enabled = false
+    end
+end
+
+function Show()
+    local canvas = self:GetComponent(typeof(CS.UnityEngine.Canvas))
+    if canvas then
+        canvas.enabled = true
+    end
+
+    -- 默认打开时选中普通槽，列表只显示普通技
+    local player = GetPlayer()
+    currentFilter = "normal"
+    selectedId = player.normalSkill and player.normalSkill.id or nil
+
+    BuildList()
+    Refresh()
+end
+
+function Hide()
+    local canvas = self:GetComponent(typeof(CS.UnityEngine.Canvas))
+    if canvas then
+        canvas.enabled = false
+    end
+end

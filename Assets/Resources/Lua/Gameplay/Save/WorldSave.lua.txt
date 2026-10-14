@@ -1,0 +1,55 @@
+---@class WorldSave 世界/关卡进度存档模块
+local WorldSave = {}
+
+---收集世界/关卡状态
+---@param context table
+---@return table
+function WorldSave.Collect(context)
+    local levelManager = context.levelManager
+
+    -- 副本运行中存档：保存主线快照而非副本进度，确保读档后回到主线
+    local stageId = levelManager.currentStageId or "stage_1_1"
+    local waveIndex = levelManager.currentWaveIndex or 1
+    local allWavesCompleted = levelManager.allWavesCompleted or false
+
+    if levelManager.runMode == "dungeon" and levelManager.mainRunSnapshot then
+        local snap = levelManager.mainRunSnapshot
+        stageId = snap.stageId
+        waveIndex = snap.waveIndex
+        allWavesCompleted = snap.allWavesCompleted
+    end
+
+    return {
+        currentStageId = stageId,
+        currentWaveIndex = waveIndex,
+        allWavesCompleted = allWavesCompleted,
+        unlockedStages = {},  -- 占位：待关卡解锁系统接入后填充
+        flags = {},           -- 占位：待剧情/事件标记系统接入后填充
+    }
+end
+
+---将存档数据应用到世界/关卡系统
+---@param context table
+---@param data table
+function WorldSave.Apply(context, data)
+    local levelManager = context.levelManager
+
+    -- 暂存到 LevelManager，由 GameManager 在 Load 后统一 StartStage
+    levelManager.savedStageId = data.currentStageId or "stage_1_1"
+    levelManager.savedWaveIndex = tonumber(data.currentWaveIndex) or 1
+    levelManager.savedAllWavesCompleted = data.allWavesCompleted or false
+end
+
+---默认世界/关卡数据
+---@return table
+function WorldSave.Default()
+    return {
+        currentStageId = "stage_1_1",
+        currentWaveIndex = 1,
+        allWavesCompleted = false,
+        unlockedStages = {},
+        flags = {},
+    }
+end
+
+return WorldSave

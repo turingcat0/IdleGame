@@ -1,0 +1,225 @@
+local Object = require("Utils.classic")
+local EventSystem = require("Event.EventSystem")
+local EventType = require("Event.EventType")
+local ServantInstance = require("Gameplay.Entities.Servants.ServantInstance")
+local ServantAura = require("Gameplay.Entities.Servants.ServantAura")
+
+--- 副随从不上场，只给玩家打折后的光环
+local SUB_AURA_RATIO = 0.5
+
+--- 随从视觉底边偏移表，由 Tools/Generate Servant Visual Bounds 离线生成
+local hasVisualBounds, ServantVisualBounds = pcall(require, "Config.Generated.ServantVisualBounds")
+if not hasVisualBounds then ServantVisualBounds = {} end
+
+---@class ServantManager 主随从的上场/tick/死亡处理，以及副随从光环的挂载
+---@field player Player
+---@field servants ServantInstance[] 当前在场的主随从
+---@field hasSpawned boolean 本局是否已执行过一次性 SpawnAll
+---@field loadoutSnapshot table<integer, string?> 主槽位快照（prototype id），用于检测 OnLoadoutChanged 时哪些槽位变化
+---@field deadServants table<string, boolean> 本局死亡随从的 uuid 集合，供 IsDeadThisRound 查询
+---@field subAuraServants Servant[] 当前生效的副随从光环来源
+local ServantManager = Object:extend()
+
+---@param player Player
+function ServantManager:New(player)
+    self.player = player
+    self.servants = {}
+    self.hasSpawned = false
+    self.loadoutSnapshot = {}
+    self.deadServants = {}
+    self.subAuraServants = {}
+
+    self.root = CS.UnityEngine.GameObject.Find("Servants")
+    self.spawnPoint = CS.UnityEngine.GameObject.Find("ServantSpawnPoint")
+    self.prefab = CS.UnityEngine.Resources.Load("Prefabs/ServantBase", typeof(CS.UnityEngine.GameObject))
+
+    self:RefreshSubAuras()
+    self.loadoutSnapshot = self:SnapshotLoadout()
+    EventSystem:RegisterListener(EventType.ServantLoadoutChanged, player.servantLoadout, self, ServantManager.OnLoadoutChanged)
+    EventSystem:RegisterListener(EventType.PlayerReachedBorder, nil, self, ServantManager.OnWorldWrap)
+end
+
+function ServantManager:OnLoadoutChanged()
+    self:RefreshSubAuras()
+    self:SyncMainSlots()
+end
+
+---重挂全部副随从光环。主随从的光环由上场/死亡管理，不在这里碰
+function ServantManager:RefreshSubAuras()
+    for _, servant in ipairs(self.subAuraServants) do
+        ServantAura.Remove(self.player, servant)
+    end
+
+    self.subAuraServants = {}
+    local loadout = self.player.servantLoadout
+    for index = 1, loadout:SubSlotCount() do
+        local servant = loadout:Get("sub", index)
+        if servant then
+            ServantAura.Apply(self.player, servant, SUB_AURA_RATIO)
+            table.insert(self.subAuraServants, servant)
+        end
+    end
+end
+
+---@return ServantInstance[]
+function ServantManager:GetAll()
+    return self.servants
+end
+
+---世界 wrap 事件：平移所有随从的数据层 position
+function ServantManager:OnWorldWrap(delta)
+    for _, servant in ipairs(self.servants) do
+        servant.position = servant.position + delta
+    end
+end
+
+---玩家醒来后一次性上场全部主随从
+function ServantManager:SpawnAll()
+    local loadout = self.player.servantLoadout
+    for index = 1, loadout:MainSlotCount() do
+        local servant = loadout:Get("main", index)
+        if servant then
+            self:Spawn(index, servant)
+        end
+    end
+    self.loadoutSnapshot = self:SnapshotLoadout()
+end
+
+---@param slotIndex integer
+---@param servant Servant
+function ServantManager:Spawn(slotIndex, servant)
+    local spawnX = self.spawnPoint.transform.position.x
+    local instance = ServantInstance(servant, spawnX, self.player, slotIndex)
+    table.insert(self.servants, instance)
+    ServantAura.Apply(self.player, servant, 1)
+
+    local go = CS.UnityEngine.Object.Instantiate(self.prefab)
+    if self.root then
+        go.transform:SetParent(self.root.transform, false)
+    end
+
+    --- 随从出生位置：x 用 ServantSpawnPoint 的 x，y 用 ServantSpawnPoint 的 y。
+    --- 不再走 logicScene.spawnY——那是玩家/敌人的逻辑出生线，不是随从的地面线。
+    local y = self.spawnPoint.transform.position.y
+
+    --- 用离线生成的视觉底边偏移把脚底对齐到 spawnPoint.y（与 EnemySpawner 同理）
+    local vb = ServantVisualBounds[servant.id]
+    if vb then
+        local pos = go.transform.position
+        go.transform.position = CS.UnityEngine.Vector3(
+            pos.x,
+            y - vb.bottomY * go.transform.lossyScale.y,
+            pos.z)
+    else
+        go.transform.position = CS.UnityEngine.Vector3(spawnX, y, 0)
+    end
+
+    --- 所有随从统一使用原版未染色动画（guard.controller 指向原始 SunnyLand player 动画）
+    local controller = CS.UnityEngine.Resources.Load(
+        "AnimatorControllers/guard", typeof(CS.UnityEngine.RuntimeAnimatorController))
+    if controller then
+        go:GetComponent(typeof(CS.UnityEngine.Animator)).runtimeAnimatorController = controller
+    end
+
+    --- 视图脚本挂在预制体自带的 LuaBehaviour 上（ServantBase 配 ServantViewBehaviour，
+    --- 借用 EnemyBase 时走 EnemyViewBehaviour，两者 Init 签名一致）
+    ---@type CS.LuaBehaviour
+    local behaviour = go:GetComponent(typeof(CS.LuaBehaviour))
+    behaviour.scriptEnv.Init(go, instance)
+end
+
+---配置变更实时同步：比较快照与当前 loadout，仅处理变化的槽位
+---等级升级也走这里——实例的 attributes 是 spawn 时按当时等级建好的快照，
+---level 变了必须当场重算 base stats，否则场上/卡片血量停在升级前
+function ServantManager:SyncMainSlots()
+    local loadout = self.player.servantLoadout
+    for index = 1, loadout:MainSlotCount() do
+        local current = loadout:Get("main", index)
+        local currentId = current and current.id or nil
+        local oldId = self.loadoutSnapshot[index]
+
+        --- 槽位没变但等级变了：只刷新在场实例的属性与血量，不重生
+        if currentId and currentId == oldId then
+            local inst = self:FindBySlot(index)
+            if inst then
+                inst:SyncLevel(loadout:GetLevel(currentId))
+            end
+        elseif currentId ~= oldId then
+            --- 槽位变化——按 slotIndex 精确移除旧实例（支持同原型多实例）
+            for i = #self.servants, 1, -1 do
+                if self.servants[i].slotIndex == index then
+                    local s = self.servants[i]
+                    --- 下场即死亡：清效果与撤光环都由 OnDied 统一做，这里不再手工重放
+                    s:SetHealthWithoutNotififaction(0)
+                    table.remove(self.servants, i)
+                    break
+                end
+            end
+            --- 玩家醒着且配置有新随从时生成
+            if currentId and not self.player.idle and not self.player:IsDead() then
+                self:Spawn(index, current)
+            end
+        end
+    end
+    self.loadoutSnapshot = self:SnapshotLoadout()
+end
+
+---@param slotIndex integer
+---@return ServantInstance?
+function ServantManager:FindBySlot(slotIndex)
+    for _, s in ipairs(self.servants) do
+        if s.slotIndex == slotIndex then return s end
+    end
+    return nil
+end
+
+---快照当前主槽位的 prototype id 列表
+---@return table<integer, string?>
+function ServantManager:SnapshotLoadout()
+    local snap = {}
+    local loadout = self.player.servantLoadout
+    for i = 1, loadout:MainSlotCount() do
+        local s = loadout:Get("main", i)
+        snap[i] = s and s.id or nil
+    end
+    return snap
+end
+
+---查询某个实例本局是否已死亡
+---@param servantInstance ServantInstance
+---@return boolean
+function ServantManager:IsDeadThisRound(servantInstance)
+    return self.deadServants[servantInstance.uuid] == true
+end
+
+function ServantManager:OnUpdate()
+    --- 玩家醒来后一次性上场；玩家死亡期间不补位
+    if not self.player.idle and not self.player:IsDead() and not self.hasSpawned then
+        self.hasSpawned = true
+        self:SpawnAll()
+    end
+
+    for i = #self.servants, 1, -1 do
+        local servant = self.servants[i]
+        servant:OnUpdate()
+        if servant:IsDead() then
+            self.deadServants[servant.uuid] = true
+            table.remove(self.servants, i)
+        end
+    end
+end
+
+---玩家死亡重开：撤掉全部在场随从与光环，等玩家再次出场时重新上阵
+function ServantManager:Reset()
+    for _, servant in ipairs(self.servants) do
+        --- 静默死亡：清效果（否则被动注册的事件监听会连着实例一起泄漏）与撤光环都在 OnDied 里
+        servant:SetHealthWithoutNotififaction(0)
+    end
+    self.servants = {}
+    self.hasSpawned = false
+    self.deadServants = {}
+    self.loadoutSnapshot = self:SnapshotLoadout()
+    EventSystem:FireEvent(EventType.ServantManagerReset, self)
+end
+
+return ServantManager

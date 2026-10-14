@@ -1,0 +1,79 @@
+---引导条件判定表。配置表 `condition` 列填下面某个名字，`conditionParam` 列填它的参数。
+---加一个新条件就是在 predicates 里加一个函数，不用改 GuideManager。
+---ctx 由 GuideManager 构造时注入，形如 { player = ..., levelManager = ... }
+
+local predicates = {}
+
+---@param param number 等级下限
+function predicates.levelAtLeast(ctx, param)
+    return ctx.player.progression.level >= (tonumber(param) or 0)
+end
+
+---@param param number 金币下限
+function predicates.coinsAtLeast(ctx, param)
+    return ctx.player.inventory.coins >= (tonumber(param) or 0)
+end
+
+---@param param number 水晶下限
+function predicates.crystalsAtLeast(ctx, param)
+    return ctx.player.inventory.crystals >= (tonumber(param) or 0)
+end
+
+---@param param string 关卡 id，如 stage_1_2
+function predicates.stageIs(ctx, param)
+    return ctx.levelManager.currentStageId == param
+end
+
+---@param param number 波次下限
+function predicates.waveAtLeast(ctx, param)
+    return ctx.levelManager.currentWaveIndex >= (tonumber(param) or 0)
+end
+
+---本关小怪是否已清完（不需要 param）
+function predicates.allWavesCleared(ctx, param)
+    return ctx.levelManager.allWavesCompleted == true
+end
+
+---@param param string 技能 id
+function predicates.skillUnlocked(ctx, param)
+    if not param then
+        return false
+    end
+    return ctx.player:IsSkillUnlocked(tostring(param)) == true
+end
+
+---不需要 param，只要玩家拥有至少一个随从
+function predicates.servantOwned(ctx, param)
+    local owned = ctx.player.servantLoadout:GetOwned()
+    return #owned >= 1
+end
+
+local GuideConditions = {}
+
+---没配条件视为通过。条件名写错时报警并视为不通过——
+---宁可在控制台看到一行错，也不要静默地"这组引导永远不出现"。
+---@param name string|nil
+---@param param any
+---@param ctx table
+---@return boolean
+function GuideConditions.Check(name, param, ctx)
+    if not name then
+        return true
+    end
+
+    local fn = predicates[name]
+    if not fn then
+        print("[GuideConditions] 配置了不存在的条件名：" .. tostring(name))
+        return false
+    end
+
+    local ok, result = pcall(fn, ctx, param)
+    if not ok then
+        print("[GuideConditions] 条件 " .. tostring(name) .. " 执行出错：" .. tostring(result))
+        return false
+    end
+
+    return result == true
+end
+
+return GuideConditions

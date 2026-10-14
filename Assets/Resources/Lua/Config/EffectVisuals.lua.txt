@@ -1,0 +1,35 @@
+---@class EffectVisualEntry
+---@field tint CS.UnityEngine.Color?
+---@field tintPriority number
+---@field vfx string?
+
+---效果视觉映射表：表现层按 effect.definition.id 查此表决定染色。
+---跟随特效默认按约定自动加载：Prefabs/Vfx/buff_<effectId>_loop
+---（文件不存在则静默跳过），此处显式配 vfx 可覆盖或禁用（vfx = false）。
+---@type table<string, EffectVisualEntry>
+local EffectVisuals = {
+    poison = {
+        tint = CS.UnityEngine.Color(0.4, 1, 0.4, 1),
+        tintPriority = 1,
+        vfx = "buff_poison_loop",
+    },
+    freeze = {
+        tint = CS.UnityEngine.Color(0.6, 0.9, 1, 1),
+        tintPriority = 2,
+        vfx = "buff_freeze_loop",
+    },
+    stun = {
+        tintPriority = 0,
+        vfx = "buff_stun_loop",
+    },
+    shield = {
+        tintPriority = 0,
+        vfx = "buff_shield_loop",
+    },
+    speed_down = {
+        tint = CS.UnityEngine.Color(0.1, 0.2, 0.6, 1),
+        tintPriority = 1,
+    },
+}
+
+return EffectVisuals

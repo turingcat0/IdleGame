@@ -1,0 +1,21 @@
+local EffectDefinition = require("Gameplay.Effects.EffectDefinition")
+local DamageContext = require("Gameplay.Combat.DamageContext")
+local EventSystem = require("Event.EventSystem")
+
+---@class PoisonEffectDefinition : EffectDefinition
+local PoisonEffectDefinition = EffectDefinition:extend()
+
+---@param target Entity
+---@param source Entity?
+---@param params table?
+---@param deltaTime number
+function PoisonEffectDefinition:OnUpdate(target, source, params, deltaTime)
+    local dps = params.dps or 0
+    local damage = dps * deltaTime
+    if damage > 0 then
+        target:TakeDamage(DamageContext(source, target, nil, damage, false))
+        EventSystem:FireEffectDamageDealtEvent(source, target, self, damage)
+    end
+end
+
+return PoisonEffectDefinition

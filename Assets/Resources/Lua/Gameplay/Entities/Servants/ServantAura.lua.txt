@@ -1,0 +1,50 @@
+local Modifier = require("Gameplay.Stats.Modifier")
+local ServantAuraConfigs = require("Config.Generated.ServantAuras")
+
+---@class ServantAura 随从光环：把光环配置挂成玩家属性上的 modifier
+local ServantAura = {}
+
+---@param servant Servant
+---@return string
+local function SourceOf(servant)
+    return "servant_aura_" .. servant.id
+end
+
+---挂上光环。同一个随从只会占一个槽位，所以 source 用随从 id 即可唯一
+---@param player Player
+---@param servant Servant
+---@param ratio number 主随从传 1，副随从传折扣系数
+function ServantAura.Apply(player, servant, ratio)
+    if not servant.auraId then return end
+
+    local config = ServantAuraConfigs[servant.auraId]
+    if not config then
+        print(string.format("[ServantAura] 找不到光环配置 '%s'", servant.auraId))
+        return
+    end
+
+    local source = SourceOf(servant)
+    for _, mod in ipairs(config.mods) do
+        player.attributes[mod.attribute]:AddModifier(source, Modifier(mod.modifierType, mod.value * ratio))
+    end
+end
+
+---撤掉光环。随从死亡、卸下槽位、重开关卡时都要调
+---@param player Player
+---@param servant Servant
+function ServantAura.Remove(player, servant)
+    local source = SourceOf(servant)
+    for _, attribute in pairs(player.attributes) do
+        attribute:RemoveModifier(source)
+    end
+end
+
+---@param servant Servant
+---@return string 光环的展示名，UI 用
+function ServantAura.NameOf(servant)
+    if not servant.auraId then return "无" end
+    local config = ServantAuraConfigs[servant.auraId]
+    return config and config.name or servant.auraId
+end
+
+return ServantAura

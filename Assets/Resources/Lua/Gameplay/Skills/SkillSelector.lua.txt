@@ -1,0 +1,42 @@
+local Object = require("Utils.classic")
+local SkillType = require("Gameplay.Skills.SkillType")
+
+---@class SkillSelector
+---@field owner Entity
+local SkillSelector = Object:extend()
+
+function SkillSelector:New(owner)
+    self.owner = owner
+end
+
+---根据 mana 与冷却状态决定下一个要释放的技能
+---优先级：掌控技 > 战斗技能（mana 够且冷却好） > 普通技能（fallback）
+---规则：战斗/掌控技的 cooldown 应 >= duration（放完后进入冷却，由普通技兜底）；
+---      普通技的 cooldown 必须 < duration（保证演出结束时必定可释放，避免无技能可选）。
+---@param intentSkill Skill?  期望释放的战斗技能
+---@return Skill?
+function SkillSelector:PickNext(intentSkill)
+    -- 1. 掌控技：不消耗 mana，冷却好了优先释放
+    for _, skill in ipairs(self.owner.signatureSkills) do
+        if self.owner.skillCooldownTracker:IsReady(skill) then
+            return skill
+        end
+    end
+
+    -- 2. 战斗技能：mana 够且冷却好才释放
+    if intentSkill and intentSkill.skillType == SkillType.Combat then
+        if self.owner:CanAffordSkill(intentSkill) and self.owner.skillCooldownTracker:IsReady(intentSkill) then
+            return intentSkill
+        end
+    end
+
+    -- 3. 普通技能：作为回蓝 / 默认攻击的 fallback
+    local normal = self.owner.normalSkill
+    if normal and self.owner:CanAffordSkill(normal) and self.owner.skillCooldownTracker:IsReady(normal) then
+        return normal
+    end
+
+    return nil
+end
+
+return SkillSelector

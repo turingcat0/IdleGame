@@ -1,0 +1,18 @@
+local Skill = require("Gameplay.Skills.Skill")
+local EffectTypes = require("Config.Generated.EffectTypes")
+local EffectFactory = require("Gameplay.Effects.EffectFactory")
+
+---@class CurseTouch : Skill
+---诅咒之触：命中时降低目标攻击（30%，3秒）
+local CurseTouch = Skill:extend()
+
+function CurseTouch:OnCast(source, target)
+end
+
+function CurseTouch:OnHit(source, target, ctx)
+    if not target then return end
+    local instance = EffectFactory.CreateInstance(EffectTypes.attack_down, target, source, 3, { value = -0.3 })
+    target:AddEffect(instance)
+end
+
+return CurseTouch

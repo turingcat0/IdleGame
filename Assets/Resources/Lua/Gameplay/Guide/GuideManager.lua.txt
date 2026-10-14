@@ -1,0 +1,426 @@
+local Object              = require("Utils.classic")
+local EventSystem         = require("Event.EventSystem")
+local EventType           = require("Event.EventType")
+local Guides              = require("Config.Generated.Guides")
+local GuideAnchorRegistry = require("Gameplay.Guide.GuideAnchorRegistry")
+local GuideConditions     = require("Gameplay.Guide.GuideConditions")
+
+---引导步骤机。把 Guides 配置按 group 分组、按 order 排序，一步步驱动 GuideOverlay。
+---不 require GameManager（GameManager 要 require 本文件，会循环），依赖一律构造注入。
+---@class GuideManager
+local GuideManager = Object:extend()
+
+---@param player Player
+---@param levelManager LevelManager
+function GuideManager:New(player, levelManager)
+    ---交给 GuideConditions 判条件用。构造注入，避免 require GameManager 造成循环
+    self.conditionCtx = { player = player, levelManager = levelManager }
+
+    ---group id -> 按 order 排好的 { id = 步骤id, row = 配置行 } 数组
+    self.groups = {}
+    ---trigger == "start" 的 group id，已排序，保证每次运行顺序一致。
+    ---空闲时逐个轮询，配了 condition 的就会一直等到条件满足才播
+    self.polledGroups = {}
+
+    self.completedGroups = {}
+    self.completedSteps = {}
+
+    self.activeGroup = nil
+    self.activeIndex = 0
+    ---触发了但当时正在引导别的组，等空闲再跑
+    self.pendingGroups = {}
+
+    ---当前步骤的等待条件，切步时必须全部清掉
+    self.boundButton = nil
+    self.boundHandler = nil
+    self.waitingEvent = nil
+    self.waitingEventHandler = nil
+    self.deadline = nil
+    self.awaitingAnyClick = false
+
+    ---推进请求延到下一帧处理，避免在 Button.onClick 回调里就地改状态、重入自己
+    self.pendingAdvance = false
+
+    self.overlay = nil
+    ---通关结算面板打开时暂停引导
+    self.paused = false
+
+    self:BuildGroups()
+    self:RegisterTriggers()
+end
+
+function GuideManager:BuildGroups()
+    for id, row in pairs(Guides) do
+        local groupId = row.group
+        local list = self.groups[groupId]
+        if not list then
+            list = {}
+            self.groups[groupId] = list
+        end
+        table.insert(list, { id = id, row = row })
+    end
+
+    for groupId, list in pairs(self.groups) do
+        table.sort(list, function(a, b)
+            return (a.row.order or 0) < (b.row.order or 0)
+        end)
+        if list[1].row.trigger == "start" then
+            table.insert(self.polledGroups, groupId)
+        end
+    end
+
+    -- 生成表是 id 键控的字典，pairs 顺序不定，这里排一次保证行为可复现
+    table.sort(self.polledGroups)
+end
+
+---组的启动时机取自它第一步的 trigger / triggerParam。
+---"start" 由 OnUpdate 在空闲时拉起，这里只处理 "event"。
+function GuideManager:RegisterTriggers()
+    for groupId, list in pairs(self.groups) do
+        local first = list[1].row
+        if first.trigger == "event" then
+            local eventType = EventType[first.triggerParam]
+            if eventType then
+                -- 触发器活到进程结束，不需要摘，用闭包捕获 groupId 即可
+                EventSystem:RegisterListener(eventType, nil, nil, function()
+                    self:RequestStart(groupId)
+                end)
+            else
+                print("[GuideManager] 组 " .. tostring(groupId) ..
+                      " 的 triggerParam 不是有效 EventType：" .. tostring(first.triggerParam))
+            end
+        end
+    end
+end
+
+---@return table|nil 形如 { Show = fn, Hide = fn }
+function GuideManager:GetOverlay()
+    if self.overlay then
+        return self.overlay
+    end
+
+    local go = CS.UnityEngine.GameObject.Find("GuideCanvas")
+    if not go then
+        return nil
+    end
+    local behaviour = go:GetComponent(typeof(CS.LuaBehaviour))
+    if not behaviour then
+        return nil
+    end
+
+    -- GuideOverlay 是挂在 GuideCanvas 上的 LuaBehaviour，它的函数住在自己的 scriptEnv 里，
+    -- 只能这样取出来。懒取是为了不依赖 GameManager 与 LuaBehaviour 的 Start 先后顺序。
+    local env = behaviour:GetScriptEnv()
+    self.overlay = {
+        Show = env.Show,
+        Hide = env.Hide,
+    }
+
+    local setSkipHandler = env.SetSkipHandler
+    if setSkipHandler then
+        setSkipHandler(function()
+            self:SkipCurrentGroup()
+        end)
+    end
+
+    return self.overlay
+end
+
+---触发器命中。不在这里直接起，而是排进队列交给 OnUpdate——
+---这样"正在播别的组"和"条件还没满足"两种等待用同一套逻辑，
+---不会因为当场起不来就把这组永远丢掉（触发事件多半一辈子只发一次）。
+---@param groupId string
+function GuideManager:RequestStart(groupId)
+    if self.completedGroups[groupId] then
+        return
+    end
+    for _, queued in ipairs(self.pendingGroups) do
+        if queued == groupId then
+            return
+        end
+    end
+    table.insert(self.pendingGroups, groupId)
+end
+
+---条件不满足时不算失败，只是"还没到时候"——返回 false 留着下次再试。
+---@param groupId string
+---@return boolean 是否真的开始了
+function GuideManager:TryStart(groupId)
+    if self.activeGroup then
+        return false
+    end
+    if self.completedGroups[groupId] then
+        return false
+    end
+    if not self:IsHomePage() then
+        return false
+    end
+    local list = self.groups[groupId]
+    if not list then
+        return false
+    end
+
+    -- 条件挂在组的第一步上，和 trigger 一样属于组不属于步
+    local first = list[1].row
+    if not GuideConditions.Check(first.condition, first.conditionParam, self.conditionCtx) then
+        return false
+    end
+
+    self.activeGroup = groupId
+    self.activeIndex = 0
+    self:NextStep()
+    return true
+end
+
+function GuideManager:NextStep()
+    self:ClearStepBindings()
+
+    local list = self.groups[self.activeGroup]
+    local step
+    while true do
+        self.activeIndex = self.activeIndex + 1
+        step = list[self.activeIndex]
+        if not step then
+            self:FinishGroup()
+            return
+        end
+        if not self.completedSteps[step.id] then
+            break
+        end
+    end
+
+    self:ShowStep(step)
+end
+
+function GuideManager:ShowStep(step)
+    local overlay = self:GetOverlay()
+    if not overlay then
+        print("[GuideManager] 场景里找不到 GuideCanvas，引导无法显示，放弃本组")
+        self:FinishGroup()
+        return
+    end
+
+    local anchor = GuideAnchorRegistry.Resolve(step.row.targetAnchor)
+    if not anchor then
+        print("[GuideManager] 锚点解析失败，跳过该步：" .. tostring(step.row.targetAnchor))
+        self:MarkStepDone(step)
+        return
+    end
+
+    overlay.Show(anchor, step.row.text)
+    self:BindAdvance(step, anchor)
+end
+
+---挂上"这步什么时候算完成"的等待条件
+function GuideManager:BindAdvance(step, anchor)
+    local advance = step.row.advance or "clickTarget"
+
+    if advance == "clickTarget" then
+        local button = anchor:GetComponent(typeof(CS.UnityEngine.UI.Button))
+        if not button then
+            print("[GuideManager] advance=clickTarget 但锚点上没有 Button：" .. tostring(step.id))
+            self:MarkStepDone(step)
+            return
+        end
+        -- 面板自己的 onClick 是在它 Awake 里先注册的，UnityEvent 按注册顺序调，
+        -- 所以真实业务动作先发生、我们随后推进，不需要接管或转发点击
+        self.boundButton = button
+        self.boundHandler = function()
+            self:MarkStepDone(step)
+        end
+        button.onClick:AddListener(self.boundHandler)
+
+    elseif advance == "event" then
+        local eventType = EventType[step.row.advanceParam]
+        if not eventType then
+            print("[GuideManager] advance=event 但 advanceParam 不是有效 EventType：" ..
+                  tostring(step.row.advanceParam))
+            self:MarkStepDone(step)
+            return
+        end
+        self.waitingEvent = eventType
+        self.waitingEventHandler = function()
+            self:MarkStepDone(step)
+        end
+        EventSystem:RegisterListener(eventType, nil, nil, self.waitingEventHandler)
+
+    elseif advance == "delay" then
+        self.deadline = CS.UnityEngine.Time.time + (tonumber(step.row.advanceParam) or 1)
+
+    elseif advance == "clickAnywhere" then
+        self.awaitingAnyClick = true
+
+    else
+        print("[GuideManager] 未知的 advance 取值，按 clickAnywhere 处理：" .. tostring(advance))
+        self.awaitingAnyClick = true
+    end
+end
+
+function GuideManager:ClearStepBindings()
+    if self.boundButton then
+        self.boundButton.onClick:RemoveListener(self.boundHandler)
+        self.boundButton = nil
+        self.boundHandler = nil
+    end
+    if self.waitingEvent then
+        -- EventSystem:RemoveListener 是 fail-fast 的，只在确实注册过时才调
+        EventSystem:RemoveListener(self.waitingEvent, nil, nil, self.waitingEventHandler)
+        self.waitingEvent = nil
+        self.waitingEventHandler = nil
+    end
+    self.deadline = nil
+    self.awaitingAnyClick = false
+end
+
+---标记完成并请求推进。真正的切步在下一帧的 OnUpdate 里做。
+function GuideManager:MarkStepDone(step)
+    self.completedSteps[step.id] = true
+    self.pendingAdvance = true
+end
+
+function GuideManager:FinishGroup()
+    self:ClearStepBindings()
+    self.pendingAdvance = false
+
+    if self.activeGroup then
+        self.completedGroups[self.activeGroup] = true
+    end
+    self.activeGroup = nil
+    self.activeIndex = 0
+
+    local overlay = self:GetOverlay()
+    if overlay then
+        overlay.Hide()
+    end
+end
+
+---跳过按钮：只跳当前这一组，跳完继续走后面的组。
+---这样卡死时能脱身，又不至于一按就永久关掉整套引导。
+function GuideManager:SkipCurrentGroup()
+    if self.activeGroup then
+        self:FinishGroup()
+    end
+end
+
+---结算面板是否正在显示
+function GuideManager:IsSettlementOpen()
+    local lm = self.conditionCtx.levelManager
+    return lm and lm.settlement ~= nil
+end
+
+---是否在主页面：没有任何功能窗口打开，也没有结算面板
+function GuideManager:IsHomePage()
+    if self:IsSettlementOpen() then
+        return false
+    end
+
+    local windowNames = {
+        "ServantWindow",
+        "GachaWindow",
+        "SkillWindow",
+        "CombatStatsWindow",
+        "DungeonWindow",
+        "ServantUpgradeWindow",
+    }
+
+    for _, name in ipairs(windowNames) do
+        local go = CS.UnityEngine.GameObject.Find(name)
+        if go then
+            local canvas = go:GetComponent(typeof(CS.UnityEngine.Canvas))
+            if canvas and canvas.enabled then
+                return false
+            end
+        end
+    end
+
+    return true
+end
+
+function GuideManager:OnUpdate()
+    -- 通关结算打开时：暂停当前引导、禁止起新组
+    if self:IsSettlementOpen() then
+        if not self.paused then
+            self.paused = true
+            self:ClearStepBindings()
+            local overlay = self:GetOverlay()
+            if overlay then
+                overlay.Hide()
+            end
+        end
+        return
+    end
+
+    -- 结算关闭后：恢复当前步骤或继续推进
+    if self.paused then
+        self.paused = false
+        if self.pendingAdvance then
+            self.pendingAdvance = false
+            if self.activeGroup then
+                self:NextStep()
+            end
+            return
+        end
+        if self.activeGroup then
+            local step = self.groups[self.activeGroup][self.activeIndex]
+            if step then
+                self:ShowStep(step)
+            end
+        end
+        return
+    end
+
+    if self.pendingAdvance then
+        self.pendingAdvance = false
+        if self.activeGroup then
+            self:NextStep()
+        end
+        return
+    end
+
+    if not self.activeGroup then
+        -- 排队中的组：条件没满足就留在队里下帧再试，不能直接丢掉
+        -- （触发事件多半只发一次，丢了就永远不会再来）。每次只摘掉真正启动的那个。
+        for i, queued in ipairs(self.pendingGroups) do
+            if self.completedGroups[queued] then
+                table.remove(self.pendingGroups, i)
+                return
+            end
+            if self:TryStart(queued) then
+                table.remove(self.pendingGroups, i)
+                return
+            end
+        end
+
+        -- trigger=start 的组：条件不满足就跳过它去看下一个，
+        -- 否则一个永远满足不了的条件会把后面的组全堵死
+        for _, groupId in ipairs(self.polledGroups) do
+            if not self.completedGroups[groupId] and self:TryStart(groupId) then
+                break
+            end
+        end
+        return
+    end
+
+    if self.deadline and CS.UnityEngine.Time.time >= self.deadline then
+        self.deadline = nil
+        self:MarkStepDone(self.groups[self.activeGroup][self.activeIndex])
+    elseif self.awaitingAnyClick and CS.UnityEngine.Input.GetMouseButtonDown(0) then
+        self.awaitingAnyClick = false
+        self:MarkStepDone(self.groups[self.activeGroup][self.activeIndex])
+    end
+end
+
+---存档用：交给 GuideSave 收集/恢复
+function GuideManager:CollectProgress()
+    return {
+        groups = self.completedGroups,
+        steps = self.completedSteps,
+    }
+end
+
+function GuideManager:ApplyProgress(data)
+    self.completedGroups = data.groups or {}
+    self.completedSteps = data.steps or {}
+end
+
+return GuideManager

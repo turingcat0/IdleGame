@@ -1,0 +1,11 @@
+﻿id,name,unlockCondition
+chapter_1,第1章:荒野,
+chapter_2,第2章:热带平原,chapter_1
+chapter_3,第3章:地牢,chapter_2
+chapter_4,第4章:草原,chapter_3
+chapter_5,第5章:金色平原,chapter_4
+chapter_6,第6章:深渊,chapter_5
+chapter_7,第7章:森林,chapter_6
+chapter_8,第8章:热带高原,chapter_7
+chapter_9,第9章:暗影巢穴,chapter_8
+chapter_10,第10章:繁花森林,chapter_9

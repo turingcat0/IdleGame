@@ -1,0 +1,22 @@
+local Skill = require("Gameplay.Skills.Skill")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+local EffectTypes = require("Config.Generated.EffectTypes")
+local EffectFactory = require("Gameplay.Effects.EffectFactory")
+
+---@class SludgeBreath : Skill
+---巨龙吐息：命中时给目标上毒（攻击力 15% DPS，5秒）
+local SludgeBreath = Skill:extend()
+
+function SludgeBreath:OnCast(source, target)
+end
+
+function SludgeBreath:OnHit(source, target, ctx)
+    if not target then return end
+    local attackAttr = source.attributes and source.attributes[AttributeType.Attack]
+    local attack = attackAttr and attackAttr:GetFinalValue() or 10
+    local dps = attack * 0.15
+    local instance = EffectFactory.CreateInstance(EffectTypes.poison, target, source, 5, { dps = dps })
+    target:AddEffect(instance)
+end
+
+return SludgeBreath

@@ -1,0 +1,28 @@
+local Skill = require("Gameplay.Skills.Skill")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+local EffectTypes = require("Config.Generated.EffectTypes")
+local EffectFactory = require("Gameplay.Effects.EffectFactory")
+
+---@class ThunderArrow : Skill
+---雷电箭：释放时给自己加攻击，命中时眩晕目标
+local ThunderArrow = Skill:extend()
+
+---@param source Entity
+---@param target Entity?
+function ThunderArrow:OnCast(source, target)
+    local attackAttr = source.attributes and source.attributes[AttributeType.Attack]
+    local attack = attackAttr and attackAttr:GetFinalValue() or 100
+    local value = attack * 0.5
+    local instance = EffectFactory.CreateInstance(EffectTypes.attack_up, source, source, 5, { value = value })
+    source:AddEffect(instance)
+end
+
+---@param source Entity
+---@param target Entity
+---@param ctx DamageContext
+function ThunderArrow:OnHit(source, target, ctx)
+    local instance = EffectFactory.CreateInstance(EffectTypes.stun, target, source, 1)
+    target:AddEffect(instance)
+end
+
+return ThunderArrow

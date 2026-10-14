@@ -1,0 +1,45 @@
+local Object = require("Utils.classic")
+
+---@class SkillCooldownTracker
+---@field remain table<string, number>  skillId -> 剩余冷却时间
+local SkillCooldownTracker = Object:extend()
+
+function SkillCooldownTracker:New()
+    self.remain = {}
+end
+
+---开始一个技能的冷却
+---@param skill Skill
+function SkillCooldownTracker:StartCooldown(skill)
+    local cooldown = tonumber(skill.cooldown)
+    if not cooldown then
+        print(string.format("[SkillCooldownTracker] Invalid cooldown for skill '%s': %s", skill.id, tostring(skill.cooldown)))
+        cooldown = 0
+    end
+    self.remain[skill.id] = cooldown
+end
+
+---判断技能是否冷却完毕
+---@param skill Skill
+---@return boolean
+function SkillCooldownTracker:IsReady(skill)
+    local r = self.remain[skill.id]
+    return not r or r <= 0
+end
+
+---清空全部冷却。复活这类"重新开局"的场景用：新的一条命不该背着上一条命的冷却残值，
+---死亡期间实体不 OnUpdate，这些残值也不会自己流干
+function SkillCooldownTracker:Clear()
+    self.remain = {}
+end
+
+---@param deltaTime number
+function SkillCooldownTracker:OnUpdate(deltaTime)
+    for id, time in pairs(self.remain) do
+        if type(time) == "number" then
+            self.remain[id] = time - deltaTime
+        end
+    end
+end
+
+return SkillCooldownTracker

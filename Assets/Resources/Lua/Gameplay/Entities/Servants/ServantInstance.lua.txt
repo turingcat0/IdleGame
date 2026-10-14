@@ -1,0 +1,162 @@
+local Entity = require("Gameplay.Entities.Entity")
+local EntityState = require("Gameplay.Entities.EntityState")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+local Attribute = require("Gameplay.Stats.Attribute")
+local EffectFactory = require("Gameplay.Effects.EffectFactory")
+local EffectInstance = require("Gameplay.Effects.EffectInstance")
+local ServantAura = require("Gameplay.Entities.Servants.ServantAura")
+
+---随从跑在玩家前面，距离超过此值后限速为玩家速度
+---以基础速度 3 为基准：速度越快 lead 越大（跑得更远），越慢越小（离玩家更近），自然错开
+local BASE_LEAD = 4
+local BASE_SPEED = 3
+
+---@class ServantInstance : Entity 上场主随从的运行时实例
+---@field servant Servant 原型
+---@field player Player 依赖注入的玩家引用
+---@field slotIndex integer 所在主槽位序号
+---@field state EntityState
+---@field level integer 等级（取自 ServantLoadout）
+local ServantInstance = Entity:extend()
+
+---@param servant Servant
+---@param position number
+---@param player Player
+---@param slotIndex integer
+function ServantInstance:New(servant, position, player, slotIndex)
+    ServantInstance.super.New(self)
+    self.servant = servant
+    self.position = position
+    self.player = player
+    self.slotIndex = slotIndex
+    local level = player.servantLoadout:GetLevel(servant.id)
+    self.level = level
+    local baseStats = servant:GetBaseStatsAtLevel(level)
+    self.attributes = {}
+    for attrType, baseValue in pairs(baseStats) do
+        self.attributes[attrType] = Attribute(baseValue)
+    end
+
+    --- 随从属于玩家阵营，"servant" 只是需要区分时的手柄
+    table.insert(self.tags, "player")
+    table.insert(self.tags, "servant")
+
+    self:InitHealth()
+    self.mana = self.attributes[AttributeType.MaxMana]:GetFinalValue()
+
+    self.normalSkill = servant.normalSkill
+    self.combatSkill = servant.combatSkill
+    self.skillIntent = servant.combatSkill
+    self.passiveId = servant.passiveId
+    self.signatureSkills = {}
+
+    self:ApplyPassive()
+end
+
+---把被动作为永久效果（duration 为 0）挂在自己身上
+function ServantInstance:ApplyPassive()
+    if not self.passiveId then return end
+
+    local definition = EffectFactory.GetDefinition(self.passiveId)
+    if not definition then
+        print(string.format("[ServantInstance] 找不到被动配置 '%s'", self.passiveId))
+        return
+    end
+    self:AddEffect(EffectInstance(definition, self, self, 0, {}))
+end
+
+function ServantInstance:OnUpdate()
+    ServantInstance.super.OnUpdate(self)
+
+    if self:IsDead() then return end
+
+    -- 仅 HasGoal 检查需要 combatManager，保留这一处 require
+    local GameManager = require("GameManager")
+    ---@type CombatManager
+    local combatManager = GameManager.levelManager.combatManager
+
+    if self.stunned then
+        self.state = EntityState.ExlusiveEffect
+        self.moveSpeed = 0
+    else
+        local nextSkill = self:GetNextSkillToCast()
+        local hasGoal = nextSkill ~= nil and combatManager:HasGoal(self, nextSkill)
+
+        if hasGoal then
+            self.state = EntityState.Attacking
+        else
+            self.state = EntityState.Walking
+        end
+
+        if self:IsKnockback() then
+            self.moveSpeed = 0
+        elseif hasGoal then
+            self.moveSpeed = 0
+            self:TryCast()
+        else
+            --- 跑在玩家前面；速度越快 lead 越大，自然错开
+            local speed = self.attributes[AttributeType.Speed]:GetFinalValue()
+            local leadDistance = math.max(1, BASE_LEAD + (speed - BASE_SPEED))
+            local lead = self.position - self.player.position
+            if lead >= leadDistance then
+                self.moveSpeed = self.player.moveSpeed
+            else
+                self.moveSpeed = speed
+            end
+        end
+    end
+
+    --- 随从和玩家同向（facing 默认为 1），位移与击退的互斥判断收在基类 Move 里
+    self:Move()
+end
+
+---随从击杀敌人的经验直接算在玩家头上
+---@param exp number
+function ServantInstance:AddExp(exp)
+    self.player.progression:AddExp(exp)
+end
+
+---把 attributes 的 baseValue 重算到新等级（保留 modifier / 事件 / 状态），
+---并按比例同步当前血量与蓝量——满血升级后依旧满血，半血升级后依旧半血。
+---@param newLevel integer
+function ServantInstance:SyncLevel(newLevel)
+    if newLevel == self.level then return end
+    self.level = newLevel
+
+    local hpAttr = self.attributes[AttributeType.MaxHealth]
+    local mpAttr = self.attributes[AttributeType.MaxMana]
+    local oldMaxHP = hpAttr and hpAttr:GetFinalValue() or 0
+    local oldMaxMP = mpAttr and mpAttr:GetFinalValue() or 0
+    local hpRatio = oldMaxHP > 0 and (self.health / oldMaxHP) or 1
+    local mpRatio = oldMaxMP > 0 and (self.mana / oldMaxMP) or 1
+
+    local baseStats = self.servant:GetBaseStatsAtLevel(newLevel)
+    for attrType, baseValue in pairs(baseStats) do
+        local attr = self.attributes[attrType]
+        if attr then
+            attr:SetBaseValue(baseValue)
+        end
+    end
+
+    if hpAttr then
+        local newMaxHP = hpAttr:GetFinalValue()
+        --- 不 clamp 下限：若旧血量 <= 0（已是尸体被复活）保持 0，避免复活出 1 血；
+        --- 若旧血量 > 0 则按比例换算，至少 1 血
+        local newHP = self.health <= 0 and 0 or math.max(1, math.floor(newMaxHP * hpRatio))
+        self:SetHealth(newHP)
+    end
+    if mpAttr then
+        local newMaxMP = mpAttr:GetFinalValue()
+        self:SetMana(math.max(0, math.floor(newMaxMP * mpRatio)))
+    end
+end
+
+---死亡：基类清掉自己身上的效果，再撤掉挂在玩家身上的光环
+function ServantInstance:OnDied()
+    ServantInstance.super.OnDied(self)
+    self.state = EntityState.Dead
+
+    ServantAura.Remove(self.player, self.servant)
+end
+
+return ServantInstance

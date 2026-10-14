@@ -1,0 +1,324 @@
+local GameManager = require("GameManager")
+local Servants = require("Gameplay.Entities.Servants.Servants")
+local EventSystem = require("Event.EventSystem")
+
+---需要的节点结构（当前场景）：
+---GachaWindow (Canvas + LuaBehaviour)
+---└ Background
+---    ├ Frame
+---    ├ TopBar/{Title, CloseButton/{Frame, Image}, ResourcePanel/Coin/{Background/{Icon, Count}}}
+---    ├ BannerArea/{BannerImage(Image), PoolName}
+---    ├ PityBar/{PityLabel, PityBg/PityFill(Image), PityCount}
+---    ├ ButtonArea/{Draw1Button/Text, Draw10Button/Text}
+---    ├ ResultArea/ScrollView/Viewport/Content   （旧结果区，当前不再使用）
+---    └ ResultPopup/{Mask(Button), Image/{Frame/{Title}, ResultArea/ScrollView/Viewport/Content}}
+---Prefabs/GachaResultCard: 自身带 Image+Button+LayoutElement，子节点 Portrait(Image)/Name(TMP)/RarityText(TMP)
+
+---@type CS.UnityEngine.MonoBehaviour
+local self = self
+
+local coinText = nil
+local pityBgRect = nil
+local pityFillRect = nil
+local pityCount = nil
+local draw1Text = nil
+local draw10Text = nil
+local resultPopup = nil
+local resultMaskButton = nil
+local resultPopupContent = nil
+local player = nil
+
+local ColCardBg = CS.UnityEngine.Color(0.09, 0.12, 0.17, 1)
+local ColNew = CS.UnityEngine.Color(0.30, 0.85, 0.55, 1)
+local ColDupe = CS.UnityEngine.Color(0.85, 0.55, 0.30, 1)
+local ColCardDupe = CS.UnityEngine.Color(0.14, 0.10, 0.07, 1)
+
+---必须节点/组件查找：找不到直接抛错
+local function SafeFind(path, expectedType)
+    local obj = self.transform:Find(path)
+    if not obj then
+        error("[GachaWindow] 找不到节点: " .. path)
+    end
+    if expectedType then
+        local comp = obj:GetComponent(expectedType)
+        if not comp then
+            error("[GachaWindow] 节点 " .. path .. " 缺少组件")
+        end
+        return comp
+    end
+    return obj
+end
+
+local function GetGachaManager()
+    return GameManager.gachaManager
+end
+
+function Awake()
+    coinText = SafeFind("Background/TopBar/ResourcePanel/Coin/Background/Count", typeof(CS.TMPro.TextMeshProUGUI))
+
+    local closeButton = SafeFind("Background/TopBar/CloseButton", typeof(CS.UnityEngine.UI.Button))
+    --- 改名为唯一名字，避免和其它窗口的 CloseButton 混淆
+    closeButton.gameObject.name = "GachaCloseButton"
+    closeButton.onClick:AddListener(Hide)
+
+    local pityBgTf = SafeFind("Background/PityBar/PityBg")
+    pityBgRect = pityBgTf:GetComponent(typeof(CS.UnityEngine.RectTransform))
+    pityFillRect = SafeFind("Background/PityBar/PityBg/PityFill", typeof(CS.UnityEngine.RectTransform))
+    pityCount = SafeFind("Background/PityBar/PityCount", typeof(CS.TMPro.TextMeshProUGUI))
+
+    local draw1Button = SafeFind("Background/ButtonArea/Draw1Button", typeof(CS.UnityEngine.UI.Button))
+    draw1Button.onClick:AddListener(function() DoDraw(1) end)
+    draw1Text = SafeFind("Background/ButtonArea/Draw1Button/Text", typeof(CS.TMPro.TextMeshProUGUI))
+
+    local draw10Button = SafeFind("Background/ButtonArea/Draw10Button", typeof(CS.UnityEngine.UI.Button))
+    draw10Button.onClick:AddListener(function() DoDraw(10) end)
+    draw10Text = SafeFind("Background/ButtonArea/Draw10Button/Text", typeof(CS.TMPro.TextMeshProUGUI))
+
+    resultPopup = SafeFind("Background/ResultPopup")
+    resultMaskButton = SafeFind("Background/ResultPopup/Mask", typeof(CS.UnityEngine.UI.Button))
+    resultPopupContent = SafeFind("Background/ResultPopup/Image/ResultArea/ScrollView/Viewport/Content")
+
+    if resultMaskButton then
+        --- 改名为唯一名字，方便新手引导定位关闭结果弹窗的按钮
+        resultMaskButton.gameObject.name = "GachaResultMask"
+        resultMaskButton.onClick:AddListener(HideResultPopup)
+    end
+
+    if resultPopup then
+        resultPopup.gameObject:SetActive(false)
+    end
+
+    ---旧结果区不再使用，避免与弹窗重叠
+    local oldResultArea = self.transform:Find("Background/ResultArea")
+    if oldResultArea then
+        oldResultArea.gameObject:SetActive(false)
+    end
+end
+
+function Start()
+    player = GameManager.player
+    EventSystem:RegisterCoinsChangedListener(player, nil, OnCoinChanged)
+
+    local canvas = self:GetComponent(typeof(CS.UnityEngine.Canvas))
+    if canvas then
+        canvas.enabled = false
+    end
+end
+
+function Show()
+    local canvas = self:GetComponent(typeof(CS.UnityEngine.Canvas))
+    if canvas then
+        canvas.enabled = true
+    end
+
+    --- GachaUI 在场景里默认 scale=0 隐藏，显示窗口时一并恢复父节点缩放
+    local parent = self.transform.parent
+    if parent then
+        parent.localScale = CS.UnityEngine.Vector3(1, 1, 1)
+    end
+
+    Refresh()
+end
+
+function HideResultPopup()
+    if resultPopup then
+        resultPopup.gameObject:SetActive(false)
+    end
+end
+
+function Hide()
+    HideResultPopup()
+
+    local canvas = self:GetComponent(typeof(CS.UnityEngine.Canvas))
+    if canvas then
+        canvas.enabled = false
+    end
+
+    local parent = self.transform.parent
+    if parent then
+        parent.localScale = CS.UnityEngine.Vector3(0, 0, 0)
+    end
+end
+
+function Refresh()
+    local gacha = GetGachaManager()
+    if not gacha then return end
+
+    if coinText then
+        coinText.text = tostring(player.inventory.coins)
+    end
+
+    if pityFillRect and pityBgRect then
+        ---spriteless Image 不支持 fillAmount，用 offsetMax 收缩右侧表示进度
+        local fullWidth = pityBgRect.rect.width
+        if fullWidth > 0 then
+            local progress = gacha:GetPityProgress()
+            pityFillRect.offsetMax = CS.UnityEngine.Vector2(
+                -(1 - progress) * fullWidth, pityFillRect.offsetMax.y)
+        end
+    end
+
+    if pityCount then
+        pityCount.text = string.format("%d/%d", gacha:GetPityCounter(), gacha:GetPityThreshold())
+    end
+
+    if draw1Text then
+        draw1Text.text = string.format("单抽\n%d", gacha:GetSingleCost())
+    end
+
+    if draw10Text then
+        draw10Text.text = string.format("十连\n%d", gacha:GetTenCost())
+    end
+end
+
+function DoDraw(times)
+    local gacha = GetGachaManager()
+    if not gacha then
+        print("[GachaWindow] GachaManager 为 nil")
+        return
+    end
+
+    print(string.format("[GachaWindow] DoDraw(%d) 被调用, 金币=%d", times, player and player.inventory.coins or -1))
+
+    local results = gacha:Draw(times)
+    if not results then
+        print("[GachaWindow] 金币不足，无法召唤")
+        return
+    end
+
+    print(string.format("[GachaWindow] 抽取成功, 结果数=%d", #results))
+    ShowResults(results)
+    Refresh()
+end
+
+function ShowResults(results)
+    print(string.format("[GachaWindow] ShowResults 被调用, 结果数=%d, Content=%s, Content.active=%s",
+        #results, tostring(resultPopupContent ~= nil),
+        resultPopupContent and tostring(resultPopupContent.gameObject.activeInHierarchy) or "nil"))
+
+    ---先清掉旧的结果卡
+    local toDestroy = {}
+    for i = 0, resultPopupContent.childCount - 1 do
+        toDestroy[#toDestroy + 1] = resultPopupContent:GetChild(i).gameObject
+    end
+    for _, go in ipairs(toDestroy) do
+        CS.UnityEngine.Object.Destroy(go)
+    end
+
+    local prefab = CS.UnityEngine.Resources.Load("Prefabs/GachaResultCard", typeof(CS.UnityEngine.GameObject))
+    if not prefab then
+        error("[GachaWindow] 找不到 Prefabs/GachaResultCard")
+    end
+    print("[GachaWindow] GachaResultCard prefab 加载成功")
+
+    local totalDupeEssence = 0
+    for _, result in ipairs(results) do
+        if result.isDupe then
+            totalDupeEssence = totalDupeEssence + 30
+        end
+
+        local go = CS.UnityEngine.Object.Instantiate(prefab, resultPopupContent)
+        go.name = "ResultCard_" .. result.servantId
+
+        local servant = Servants[result.servantId]
+
+        ---卡牌背景按是否重复着色
+        local cardImage = go:GetComponent(typeof(CS.UnityEngine.UI.Image))
+        if cardImage then
+            cardImage.color = result.isDupe and ColCardDupe or ColCardBg
+        end
+
+        ---设置随从头像
+        local portraitTf = go.transform:Find("Portrait")
+        if portraitTf then
+            local portraitImg = portraitTf:GetComponent(typeof(CS.UnityEngine.UI.Image))
+            if portraitImg then
+                local sprite = CS.UnityEngine.Resources.Load("Textures/" .. result.servantId, typeof(CS.UnityEngine.Sprite))
+                if sprite then
+                    portraitImg.sprite = sprite
+                    portraitImg.enabled = true
+                else
+                    portraitImg.sprite = nil
+                    portraitImg.enabled = false
+                end
+            end
+        end
+
+        local nameTf = go.transform:Find("Name")
+        if nameTf then
+            local tmp = nameTf:GetComponent(typeof(CS.TMPro.TextMeshProUGUI))
+            if tmp then
+                local prefix = result.isDupe and "重复 " or "新! "
+                tmp.text = prefix .. (servant and servant.name or result.servantId)
+                tmp.color = result.isDupe and ColDupe or ColNew
+            end
+        end
+
+        local rarityTf = go.transform:Find("RarityText")
+        if rarityTf then
+            local tmp = rarityTf:GetComponent(typeof(CS.TMPro.TextMeshProUGUI))
+            if tmp then
+                if result.isDupe then
+                    tmp.text = "+30 精魄"
+                    tmp.color = ColDupe
+                else
+                    tmp.text = "新随从"
+                    tmp.color = ColNew
+                end
+            end
+        end
+    end
+
+    ---十连时追加一行总精魄提示
+    if #results > 1 and totalDupeEssence > 0 then
+        local summaryGo = CS.UnityEngine.Object.Instantiate(prefab, resultPopupContent)
+        summaryGo.name = "ResultCard_Summary"
+        local cardImage = summaryGo:GetComponent(typeof(CS.UnityEngine.UI.Image))
+        if cardImage then
+            cardImage.color = ColCardBg
+        end
+
+        local portraitTf = summaryGo.transform:Find("Portrait")
+        if portraitTf then
+            local portraitImg = portraitTf:GetComponent(typeof(CS.UnityEngine.UI.Image))
+            if portraitImg then
+                portraitImg.enabled = false
+            end
+        end
+
+        local nameTf = summaryGo.transform:Find("Name")
+        if nameTf then
+            local tmp = nameTf:GetComponent(typeof(CS.TMPro.TextMeshProUGUI))
+            if tmp then
+                tmp.text = "重复转化"
+                tmp.color = ColDupe
+            end
+        end
+
+        local rarityTf = summaryGo.transform:Find("RarityText")
+        if rarityTf then
+            local tmp = rarityTf:GetComponent(typeof(CS.TMPro.TextMeshProUGUI))
+            if tmp then
+                tmp.text = string.format("共 +%d 精魄", totalDupeEssence)
+                tmp.color = ColDupe
+            end
+        end
+    end
+
+    ---显示结果弹窗
+    if resultPopup then
+        resultPopup.gameObject:SetActive(true)
+    end
+end
+
+function OnCoinChanged(oldValue, newValue)
+    if coinText then
+        coinText.text = tostring(newValue)
+    end
+end
+
+function OnDestroy()
+    if player then
+        EventSystem:RemoveCoinsChangedListener(player, nil, OnCoinChanged)
+    end
+end

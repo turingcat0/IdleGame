@@ -1,0 +1,127 @@
+local EventSystem = require "Event.EventSystem"
+local AttributeTypes = require "GamePlay.Stats.AttributeType"
+
+---@type CS.UnityEngine.UI.Text Description
+local healthTextComponent = healthText:GetComponent(typeof(CS.TMPro.TMP_Text))
+---@type CS.UnityEngine.UI.Text
+local manaTextComponent = manaText:GetComponent(typeof(CS.TMPro.TMP_Text))
+---@type CS.UnityEngine.UI.Text Description
+local levelTextComponent = levelText:GetComponent(typeof(CS.TMPro.TMP_Text))
+---@type CS.UnityEngine.UI.Text
+local progressionTextComponent = progressText:GetComponent(typeof(CS.TMPro.TMP_Text))
+
+---@type CS.UnityEngine.RectTransform
+local healthImage = health:GetComponent(typeof(CS.UnityEngine.UI.Image))
+---@type CS.UnityEngine.RectTransform
+local manaImage = mana:GetComponent(typeof(CS.UnityEngine.UI.Image))
+---@type CS.UnityEngine.RectTransform
+local progressionImage = progression:GetComponent(typeof(CS.UnityEngine.UI.Image))
+
+
+---@type Player 玩家
+local player = nil
+
+
+function Start()
+    local gameManager = require("GameManager")
+    ---@type Player 玩家
+    player = gameManager.player
+    EventSystem:RegisterAttributeChangedListener(player, AttributeTypes.MaxHealth, nil, OnMaxHealthChanged)
+    EventSystem:RegisterAttributeChangedListener(player, AttributeTypes.MaxMana, nil, OnMaxManaChanged)
+    EventSystem:RegisterExpChangedListener(player, nil, OnExpChanged)
+    EventSystem:RegisterLevelChangedListener(player, nil, OnLevelChanged)
+    EventSystem:RegisterHealthChangedListener(player, nil, OnCurrentHealthChanged)
+    EventSystem:RegisterManaChangedListener(player, nil, OnCurrentManaChanged)
+
+
+    Refresh()
+end
+
+---
+---@param image CS.UnityEngine.UI.Image
+---@param curr number
+---@param max number
+function RefreshProgressUI(image, curr, max, fromRight)
+    image.type = CS.UnityEngine.UI.Image.Type.Filled
+    image.fillOrigin = fromRight and 1 or 0
+    image.fillMethod = CS.UnityEngine.UI.Image.FillMethod.Horizontal
+    image.fillAmount = curr / max
+end
+function Refresh()
+    if player then
+        local newMax = player.attributes[AttributeTypes.MaxHealth]:GetFinalValue()
+        local newCurrent = player.health
+        healthTextComponent.text = math.ceil(newCurrent).."/"..math.ceil(newMax)
+        RefreshProgressUI(healthImage, newCurrent, newMax, false)
+
+        newMax = player.attributes[AttributeTypes.MaxMana]:GetFinalValue()
+        newCurrent = player.mana
+        manaTextComponent.text = math.ceil(newCurrent).."/"..math.ceil(newMax)
+        RefreshProgressUI(manaImage, newCurrent, newMax, true)
+
+        levelTextComponent.text = tostring(player.progression.level)
+        progressionTextComponent.text = player.progression.exp .. "/" .. player.progression.maxExp
+        RefreshProgressUI(progressionImage, player.progression.exp, player.progression.maxExp, false)
+    end
+end
+
+
+function OnDestroy()
+    EventSystem:RemoveAttributeChangedListener(player, AttributeTypes.MaxHealth, nil, OnMaxHealthChanged)
+    EventSystem:RemoveAttributeChangedListener(player, AttributeTypes.MaxMana, nil, OnMaxManaChanged)
+    EventSystem:RemoveExpChangedListener(player, nil, OnExpChanged)
+    EventSystem:RemoveLevelChangedListener(player, nil, OnLevelChanged)
+    EventSystem:RemoveHealthChangedListener(player, nil, OnCurrentHealthChanged)
+    EventSystem:RemoveManaChangedListener(player, nil, OnCurrentManaChanged)
+end
+
+function OnMaxHealthChanged()
+    if player then
+        local newMax = player.attributes[AttributeTypes.MaxHealth]:GetFinalValue()
+        local newCurrent = player.health
+        healthTextComponent.text = math.ceil(newCurrent).."/"..math.ceil(newMax)
+        RefreshProgressUI(healthImage, newCurrent, newMax, healthWidth, false)
+    end
+end
+
+function OnCurrentHealthChanged()
+    if player then
+        local newMax = player.attributes[AttributeTypes.MaxHealth]:GetFinalValue()
+        local newCurrent = player.health
+        healthTextComponent.text = math.ceil(newCurrent).."/"..math.ceil(newMax)
+         RefreshProgressUI(healthImage, newCurrent, newMax, healthWidth, false)
+    end
+end
+
+function OnMaxManaChanged()
+
+    if player then
+        local newMax = player.attributes[AttributeTypes.MaxMana]:GetFinalValue()
+        local newCurrent = player.mana
+        manaTextComponent.text = math.ceil(newCurrent).."/"..math.ceil(newMax)
+         RefreshProgressUI(manaImage, newCurrent, newMax, manaWidth, true)
+    end
+end
+
+function OnCurrentManaChanged()
+    if player then
+        local newMax = player.attributes[AttributeTypes.MaxMana]:GetFinalValue()
+        local newCurrent = player.mana
+        manaTextComponent.text = math.ceil(newCurrent).."/"..math.ceil(newMax)
+         RefreshProgressUI(manaImage, newCurrent, newMax, healthWidth, true)
+    end
+end
+
+function OnLevelChanged(oldValue, newValue)
+    if player then
+        levelTextComponent.text = tostring(newValue)
+    end
+end
+
+function OnExpChanged(oldValue, newValue)
+    if player then
+        local newMaxExp = player.progression.maxExp
+        progressionTextComponent.text = newValue .. "/" .. newMaxExp
+        RefreshProgressUI(progressionImage, newValue, newMaxExp, progressionWidth, false)
+    end
+end

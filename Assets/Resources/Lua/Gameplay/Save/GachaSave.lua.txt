@@ -1,0 +1,33 @@
+---@class GachaSave 抽奖保底计数与累计抽奖次数存档模块
+local GachaSave = {}
+
+---收集抽奖系统状态
+---@param context table
+---@return table
+function GachaSave.Collect(context)
+    local gacha = context.gameManager.gachaManager
+    return {
+        pityCounter = gacha.pityCounter or 0,
+        totalDraws = gacha.totalDraws or 0,
+    }
+end
+
+---将存档数据应用到抽奖系统
+---@param context table
+---@param data table
+function GachaSave.Apply(context, data)
+    local gacha = context.gameManager.gachaManager
+    gacha.pityCounter = tonumber(data.pityCounter) or 0
+    gacha.totalDraws = tonumber(data.totalDraws) or 0
+end
+
+---默认抽奖数据
+---@return table
+function GachaSave.Default()
+    return {
+        pityCounter = 0,
+        totalDraws = 0,
+    }
+end
+
+return GachaSave

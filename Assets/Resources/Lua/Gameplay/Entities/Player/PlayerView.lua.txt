@@ -1,0 +1,88 @@
+local Object = require("Utils.classic")
+local EntityState = require("Gameplay.Entities.EntityState")
+local GameManager = require("GameManager")
+local EventSystem = require("Event.EventSystem")
+local EventType   = require("Event.EventType")
+local BuffBarView = require("Gameplay.Visuals.BuffBarView")
+local EntityVfxBinder = require("Gameplay.Visuals.EntityVfxBinder")
+---@class PlayerView
+---@field transform CS.UnityEngine.Transform
+---@field player Player
+---@field animator CS.UnityEngine.Animator
+---@field paramMain number
+---@field paramSub number
+---@field buffBar BuffBarView?
+---@field vfxBinder EntityVfxBinder?
+local PlayerView = Object:extend()
+
+---
+---@param go CS.UnityEngine.GameObject
+function PlayerView:New(go)
+    self.transform = go.transform
+    self.player = GameManager.player
+    self.animator = go:GetComponent(typeof(CS.UnityEngine.Animator))
+    self.paramMain = CS.UnityEngine.Animator.StringToHash("PlayerState")
+    self.paramSub = CS.UnityEngine.Animator.StringToHash("PlayerSubstate")
+    self.hurtTimer = 0
+
+    local renderer = go:GetComponent(typeof(CS.UnityEngine.SpriteRenderer))
+    if renderer then
+        self.vfxBinder = EntityVfxBinder(renderer, self.transform, self.player, GameManager.vfxManager.spawner)
+    end
+
+    local buffBarContainer = CS.UnityEngine.GameObject.Find("BuffBar")
+    local buffIconPrefab = CS.UnityEngine.Resources.Load("Prefabs/Buffs/BuffIcon", typeof(CS.UnityEngine.GameObject))
+    if buffBarContainer and buffIconPrefab then
+        self.buffBar = BuffBarView(buffBarContainer.transform, buffIconPrefab, self.player)
+    end
+
+    EventSystem:RegisterListener(EventType.EntityDamageTaken, GameManager.player, self, PlayerView.OnPlayerHurt)
+end
+
+---
+---@param param integer
+---@param value integer
+function PlayerView:ModfityParameter(param, value)
+    local origin = self.animator:GetInteger(param)
+    if origin ~= value then
+        self.animator:SetInteger(param, value)
+    end
+end
+
+function PlayerView:OnPlayerHurt(entity, old, new)
+    self.hurtTimer = 0.1
+end
+
+function PlayerView:OnUpdate()
+    if self.buffBar then self.buffBar:OnUpdate() end
+
+    local y = self.player.groundY or self.transform.position.y
+    local after = CS.UnityEngine.Vector3(self.player.position, y, self.transform.position.z)
+    self.transform.position = after
+    self.hurtTimer = self.hurtTimer - CS.UnityEngine.Time.deltaTime
+
+    if self.player:IsDead() then
+        self:ModfityParameter(self.paramMain, EntityState.Dead)
+    elseif self.player:IsStunned() then
+        self:ModfityParameter(self.paramMain, EntityState.ExlusiveEffect)
+        self:ModfityParameter(self.paramSub, self.player.exclusiveSubstate)
+    elseif self.player.activeSkill then
+        self:ModfityParameter(self.paramMain, EntityState.Attacking)
+        self:ModfityParameter(self.paramSub, self.player.activeSkill.substate)
+    elseif self.player.state == EntityState.Walking then
+        self:ModfityParameter(self.paramMain, EntityState.Walking)
+    elseif self.hurtTimer > 0 then
+        self:ModfityParameter(self.paramMain, EntityState.Hurt)
+    else
+        self:ModfityParameter(self.paramMain, EntityState.Idling)
+        self:ModfityParameter(self.paramSub, 0)
+    end
+end
+
+function PlayerView:Dispose()
+    if self.buffBar then self.buffBar:Dispose() end
+    if self.vfxBinder then self.vfxBinder:Dispose() end
+    EventSystem:RemoveListener(EventType.EntityDamageTaken, GameManager.player, self, PlayerView.OnPlayerHurt)
+end
+
+return PlayerView

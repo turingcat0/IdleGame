@@ -1,0 +1,114 @@
+local Object = require("Utils.classic")
+local EntityState = require("Gameplay.Entities.EntityState")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+local BuffBarView = require("Gameplay.Visuals.BuffBarView")
+local EntityVfxBinder = require("Gameplay.Visuals.EntityVfxBinder")
+local OverheadAnchor = require("Gameplay.Visuals.OverheadAnchor")
+
+---@class EnemyView
+---@field go UnityEngine.GameObject
+---@field enemyInstance EnemyInstance
+---@field bgRect CS.UnityEngine.RectTransform?
+---@field fillRect CS.UnityEngine.RectTransform?
+---@field ghostRect CS.UnityEngine.RectTransform?
+---@field buffBar BuffBarView?
+---@field vfxBinder EntityVfxBinder?
+---@field overheadAnchor OverheadAnchor?
+local EnemyView = Object:extend()
+
+
+---
+---@param go CS.UnityEngine.GameObject
+---@param enemyInstance EnemyInstance
+function EnemyView:New(go, enemyInstance)
+    self.go = go
+    ---头顶血条结构：Canvas/HP(Border) / Bg(track) / Ghost(残影) / Fill(即时)，与 BossBar 同款
+    ---若 prefab 未重建（无 Bg/Fill/Ghost），下面三个为 nil，OnUpdate 会跳过血条更新
+    self.bgRect = nil
+    self.fillRect = nil
+    self.ghostRect = nil
+    local bgTf = go.transform:Find("Canvas/HP/Bg")
+    if bgTf then
+        self.bgRect = bgTf:GetComponent(typeof(CS.UnityEngine.RectTransform))
+        local fillTf = bgTf:Find("Fill")
+        if fillTf then self.fillRect = fillTf:GetComponent(typeof(CS.UnityEngine.RectTransform)) end
+        local ghostTf = bgTf:Find("Ghost")
+        if ghostTf then self.ghostRect = ghostTf:GetComponent(typeof(CS.UnityEngine.RectTransform)) end
+    end
+    self.enemyInstance = enemyInstance
+    self.animator = go:GetComponent(typeof(CS.UnityEngine.Animator))
+    self.paramMain = CS.UnityEngine.Animator.StringToHash("States")
+
+    --- boss 用屏幕顶部 BossBar 显示血量，隐藏头顶小血条（Canvas/BuffBar 仍保留以显示 buff）
+    if enemyInstance.isBoss then
+        local hp = go.transform:Find("Canvas/HP")
+        if hp then hp.gameObject:SetActive(false) end
+    end
+
+    local renderer = go:GetComponent(typeof(CS.UnityEngine.SpriteRenderer))
+    if renderer then
+        local GameManager = require("GameManager")
+        self.vfxBinder = EntityVfxBinder(renderer, go.transform, enemyInstance, GameManager.vfxManager.spawner)
+        self.overheadAnchor = OverheadAnchor(renderer, go.transform:Find("Canvas"), go.transform)
+    end
+
+    local buffBar = go.transform:Find("Canvas/BuffBar")
+    local buffIconPrefab = CS.UnityEngine.Resources.Load("Prefabs/Buffs/BuffIcon", typeof(CS.UnityEngine.GameObject))
+    if buffBar and buffIconPrefab then
+        self.buffBar = BuffBarView(buffBar, buffIconPrefab, enemyInstance)
+    end
+end
+
+---@param param integer
+---@param value integer
+function EnemyView:ModifyParameter(param, value)
+    local origin = self.animator:GetInteger(param)
+    if origin ~= value then
+        self.animator:SetInteger(param, value)
+    end
+end
+
+function EnemyView:OnUpdate()
+    if self.buffBar then self.buffBar:OnUpdate() end
+
+    local after = CS.UnityEngine.Vector3(self.enemyInstance.position, self.go.transform.position.y, self.go.transform.position.z)
+    self.go.transform.position = after
+
+    -- 速度为 0 的敌人即使是 Walking 逻辑状态也播放 Idle 动画
+    local animState = self.enemyInstance.state
+    if animState == EntityState.Walking and self.enemyInstance.moveSpeed == 0 then
+        animState = EntityState.Idling
+    end
+    self:ModifyParameter(self.paramMain, animState)
+
+    if self.overheadAnchor then self.overheadAnchor:OnUpdate() end
+
+    ---头顶血条：Fill 即时跟随、Ghost 残影滞后（与 BossBar 同款，offsetMax 收缩）
+    if self.fillRect and self.bgRect and self.ghostRect then
+        local fullWidth = self.bgRect.rect.width
+        if fullWidth > 0 then
+            local maxHealth = self.enemyInstance.attributes[AttributeType.MaxHealth]:GetFinalValue()
+            local targetFill = math.max(0, math.min(1, self.enemyInstance.health / maxHealth))
+            self.fillRect.offsetMax = CS.UnityEngine.Vector2(-(1 - targetFill) * fullWidth, self.fillRect.offsetMax.y)
+            local ghostFill = self.ghostRect.rect.width / fullWidth
+            local newGhostFill
+            if targetFill < ghostFill then
+                local dt = CS.UnityEngine.Time.deltaTime
+                newGhostFill = ghostFill + (targetFill - ghostFill) * math.min(1, dt * 2)
+            else
+                newGhostFill = targetFill
+            end
+            self.ghostRect.offsetMax = CS.UnityEngine.Vector2(-(1 - newGhostFill) * fullWidth, self.ghostRect.offsetMax.y)
+        end
+    end
+    if self.enemyInstance:IsDead() then
+        CS.UnityEngine.Object.Destroy(self.go)
+    end
+end
+
+function EnemyView:Dispose()
+    if self.buffBar then self.buffBar:Dispose() end
+    if self.vfxBinder then self.vfxBinder:Dispose() end
+end
+
+return EnemyView

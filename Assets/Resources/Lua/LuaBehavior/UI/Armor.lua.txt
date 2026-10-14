@@ -1,0 +1,99 @@
+local EquipmentSlot = require "Gameplay.Items.EquipmentSlot"
+local Rarity        = require "Gameplay.Items.Rarity"
+local AttributeType = require "Gameplay.Stats.AttributeType"
+
+---@type CS.TMPro.TMP_Text
+local name
+---@type CS.TMPro.TMP_Text
+local slot
+---@type CS.UnityEngine.UI.Image
+local image
+---@type CS.TMPro.TMP_Text
+local rarity
+---@type CS.TMPro.TMP_Text
+local setName
+---@type CS.TMPro.TMP_Text
+local specialEffect
+---@type CS.TMPro.TMP_Text[]
+local attributes
+---@type CS.UnityEngine.Canvas
+local canvas
+---@type CS.TMPro.TMP_Text
+local level
+---@type CS.UnityEngine.UI.Button
+local mask
+
+local function InitComponents()
+    if name then return end
+    canvas = self.gameObject:GetComponent(typeof(CS.UnityEngine.Canvas))
+    name = self.transform:Find("Background/Background1/Title"):GetComponent(typeof(CS.TMPro.TMP_Text))
+    slot = self.transform:Find("Background/Background1/Slot"):GetComponent(typeof(CS.TMPro.TMP_Text))
+    image = self.transform:Find("Background/Background1/Image"):GetComponent(typeof(CS.UnityEngine.UI.Image))
+    rarity = self.transform:Find("Background/Background1/Rarity"):GetComponent(typeof(CS.TMPro.TMP_Text))
+    setName = self.transform:Find("Background/Background1/EquipmentSet"):GetComponent(typeof(CS.TMPro.TMP_Text))
+    specialEffect = self.transform:Find("Background/Background1/Effects/Attribute8/Value"):GetComponent(typeof(CS.TMPro.TMP_Text))
+    level = self.transform:Find("Background/Background1/Level"):GetComponent(typeof(CS.TMPro.TMP_Text))
+    mask = self.transform:Find("Mask"):GetComponent(typeof(CS.UnityEngine.UI.Button))
+    attributes = {}
+    for i = 1, 7 do
+        attributes[i] = self.transform:Find("Background/Background1/Effects/Attribute"..i.."/Value"):GetComponent(typeof(CS.TMPro.TMP_Text))
+    end
+end
+
+function Start()
+    InitComponents()
+    mask.onClick:AddListener(function ()
+        canvas.enabled = false
+    end)
+end
+
+
+function OnDestroy()
+    mask.onClick:RemoveAllListeners()
+end
+
+local slotTranslations = {
+    [EquipmentSlot.MainHand] = "主手",
+    [EquipmentSlot.OffHand] = "副手",
+    [EquipmentSlot.Helmet] = "头盔",
+    [EquipmentSlot.Chestplate] = "胸甲",
+    [EquipmentSlot.Leggings] = "护腿",
+    [EquipmentSlot.Boots] = "靴子",
+    [EquipmentSlot.Accessory] = "饰品",
+    [EquipmentSlot.Necklace] = "项链",
+}
+
+local rarityTranslations = {
+    [Rarity.Common] = "普通",
+    [Rarity.Uncommon] = "优秀",
+    [Rarity.Rare] = "稀有",
+    [Rarity.Epic] = "史诗",
+    [Rarity.Legendary] = "传说",
+    [Rarity.Mythic] = "神话",
+}
+
+
+---@param itemInstance ItemInstance
+function Init(itemInstance)
+    InitComponents()
+    name:SetText(itemInstance.item.name)
+    slot:SetText(slotTranslations[itemInstance.item.equipmentSlot])
+    local texture = CS.UnityEngine.Resources.Load("Textures/"..itemInstance.item.id, typeof(CS.UnityEngine.Sprite))
+    image.sprite = texture
+    rarity:SetText(rarityTranslations[itemInstance.item.rarity])
+    setName:SetText(itemInstance.item.equipmentSet.name)
+    specialEffect:SetText("无")
+    level:SetText("Lv"..itemInstance.level)
+    canvas.enabled = true
+
+    for i = 1, 7 do
+        attributes[i]:SetText(tostring(itemInstance.equipmentEffect.attributes[i]:GetFinalValue()))
+    end
+
+    attributes[AttributeType.CritChance]
+    :SetText(tostring(itemInstance.equipmentEffect.attributes[AttributeType.CritChance]:GetFinalValue() * 100) .. "%" )
+
+    attributes[AttributeType.CritDamage]
+    :SetText(tostring(itemInstance.equipmentEffect.attributes[AttributeType.CritDamage]:GetFinalValue() * 100) .. "%" )
+end
+

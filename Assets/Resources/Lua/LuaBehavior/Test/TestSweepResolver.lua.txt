@@ -1,0 +1,66 @@
+local SweepResolver = require("Gameplay.Dungeon.SweepResolver")
+local StageConfigs  = require("Config.Generated.Stages")
+local EnemyConfigs  = require("Config.Generated.Enemies")
+
+---纯 Lua 断言测试：验证 SweepResolver 的奖励结算逻辑
+local TestSweepResolver = {}
+
+local failCount = 0
+
+local function check(cond, msg)
+    if cond then
+        print("  ✓ " .. msg)
+    else
+        failCount = failCount + 1
+        print("  ✗ FAIL: " .. msg)
+    end
+end
+
+function TestSweepResolver.Run()
+    failCount = 0
+    print("[TestSweepResolver] 开始测试...")
+
+    local stageId = "dungeon_exp_1"
+    local sc = StageConfigs[stageId]
+    check(sc ~= nil, "StageConfigs[" .. stageId .. "] 存在")
+
+    --- dropRate=0 的 mock lootManager：boss 必定不掉落
+    local mockLoot = {
+        dropRate = 0,
+        RandomDropQuality = function() return 1 end,
+        RandomItemOfRarity = function() return nil end,
+        RandomDropLevel = function() return 1 end,
+    }
+
+    local result = SweepResolver.Resolve(stageId, 5, mockLoot)
+
+    --- 1. crystal/coins 匹配 Stages 配置
+    check(result.crystal == sc.crystalReward, "crystal 匹配配置 (" .. result.crystal .. " == " .. sc.crystalReward .. ")")
+    check(result.coins == sc.coinReward, "coins 匹配配置 (" .. result.coins .. " == " .. sc.coinReward .. ")")
+
+    --- 2. dropRate=0 ⇒ bossItem 为 nil
+    check(result.bossItem == nil, "dropRate=0 时 bossItem 为 nil")
+
+    --- 3. 经验为正数（有波次 + boss）
+    check(result.exp > 0, "经验为正数 (" .. result.exp .. ")")
+
+    --- 4. 经验公式的单项验证：dino expReward=1, level=5 ⇒ ceil(ceil(1*(2*5-1))) = 9
+    local dinoBase = EnemyConfigs["dino"].expReward
+    local testLevel = 5
+    local expected = math.ceil(math.ceil(dinoBase * (2 * testLevel - 1)))
+    check(expected == 9, "dino lv5 经验公式 = " .. expected .. " (期望 9)")
+
+    --- 5. boss 经验包含在总经验中（boss expReward=50, recommendedLevel=8）
+    local bossBase = EnemyConfigs[sc.bossId].expReward
+    local bossExpected = math.ceil(math.ceil(bossBase * (2 * sc.recommendedLevel - 1)))
+    check(result.exp >= bossExpected, "总经验 >= boss 单项经验 (" .. result.exp .. " >= " .. bossExpected .. ")")
+
+    --- 6. 不存在的 stageId 返回全零
+    local badResult = SweepResolver.Resolve("nonexistent_stage", 1, mockLoot)
+    check(badResult.exp == 0 and badResult.crystal == 0 and badResult.coins == 0, "不存在 stageId 返回全零")
+
+    print(string.format("[TestSweepResolver] 测试完成，%d 项失败", failCount))
+    return failCount == 0
+end
+
+return TestSweepResolver

@@ -1,0 +1,62 @@
+local Object = require("Utils.classic")
+local Attribute       = require("Gameplay.Stats.Attribute")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+
+---@class EquipmentEffect 装备的效果
+---@field source string 装备效果的来源(用于modifier)
+---@field attributes table<AttributeType, Attribute> 这个装备提供的基础属性
+---@field effect Effect? 除了基础属性之外的特殊效果
+local EquipmentEffect = Object:extend()
+
+
+---更方便的创建器
+---@param source string
+---@param maxHealth integer
+---@param maxMana integer
+---@param attack integer
+---@param defense integer
+---@param critChance number
+---@param critDamage number
+---@param speed number
+---@param effect Effect?
+---@return EquipmentEffect
+function EquipmentEffect.Create(source,  maxHealth, maxMana, attack, defense, critChance, critDamage, speed, effect)
+    local attributes = {}
+    attributes[AttributeType.MaxHealth] = Attribute(maxHealth)
+    attributes[AttributeType.MaxMana] = Attribute(maxMana)
+    attributes[AttributeType.Attack] = Attribute(attack)
+    attributes[AttributeType.Defense] = Attribute(defense)
+    attributes[AttributeType.CritChance] = Attribute(critChance)
+    attributes[AttributeType.CritDamage] = Attribute(critDamage)
+    attributes[AttributeType.Speed] = Attribute(speed)
+    return EquipmentEffect(source, attributes, effect)
+end
+
+---
+---@param source string
+---@param attributes table<AttributeType, Attribute>
+---@param effect Effect?
+function EquipmentEffect:New(source, attributes, effect)
+    self.source = source
+    self.attributes = attributes
+    self.effect = effect
+end
+
+
+---属性被获得时调用
+function EquipmentEffect:OnEffectAdded()
+    if self.effect then
+        self.effect:OnEffectAdded()
+    end
+end
+
+---被移除时调用
+function EquipmentEffect:OnRemoved()
+    if self.effect then
+        self.effect:OnEffectExpired()
+    end
+end
+
+
+
+return EquipmentEffect

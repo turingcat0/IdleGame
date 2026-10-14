@@ -1,0 +1,19 @@
+local Object = require("Utils.classic")
+
+---@class Projectile 抛射物原型类
+---@field id string 同时作为 Resources 路径段：Prefabs/Projectiles/<id>
+---@field name string
+---@field speed number
+local Projectile = Object:extend()
+
+---@param id string
+---@param name string
+---@param speed number
+function Projectile:New(id, name, speed)
+    Projectile.super.New(self)
+    self.id = id
+    self.name = name
+    self.speed = speed
+end
+
+return Projectile

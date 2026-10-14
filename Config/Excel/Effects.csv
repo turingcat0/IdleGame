@@ -1,0 +1,12 @@
+id,type,substate,stackable,maxStacks,attribute,modifierType
+shield,shield,0,,,,
+poison,poison,0,true,5,,
+speed_up,stat_mod,0,,,Speed,FlatAdd
+attack_up,stat_mod,0,,,Attack,FlatAdd
+stun,stun,1,,,,
+defense_up,stat_mod,0,,,Defense,FlatAdd
+defense_down,stat_mod,0,,,Defense,Multiply
+speed_down,stat_mod,0,,,Speed,Multiply
+attack_down,stat_mod,0,,,Attack,Multiply
+heal,heal,0,true,5,,
+immortal_totem,immortal_totem,0,,,,

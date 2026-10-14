@@ -1,0 +1,65 @@
+local Effects = {
+
+    ["shield"] = {
+        type = "shield",
+        substate = 0,
+    },
+    ["poison"] = {
+        type = "poison",
+        substate = 0,
+        stackable = true,
+        maxStacks = 5,
+    },
+    ["speed_up"] = {
+        type = "stat_mod",
+        substate = 0,
+        attribute = 7,
+        modifierType = 1,
+    },
+    ["attack_up"] = {
+        type = "stat_mod",
+        substate = 0,
+        attribute = 3,
+        modifierType = 1,
+    },
+    ["stun"] = {
+        type = "stun",
+        substate = 1,
+    },
+    ["defense_up"] = {
+        type = "stat_mod",
+        substate = 0,
+        attribute = 4,
+        modifierType = 1,
+    },
+    ["defense_down"] = {
+        type = "stat_mod",
+        substate = 0,
+        attribute = 4,
+        modifierType = 2,
+    },
+    ["speed_down"] = {
+        type = "stat_mod",
+        substate = 0,
+        attribute = 7,
+        modifierType = 2,
+    },
+    ["attack_down"] = {
+        type = "stat_mod",
+        substate = 0,
+        attribute = 3,
+        modifierType = 2,
+    },
+    ["heal"] = {
+        type = "heal",
+        substate = 0,
+        stackable = true,
+        maxStacks = 5,
+    },
+    ["immortal_totem"] = {
+        type = "immortal_totem",
+        substate = 0,
+    },
+}
+
+return Effects

@@ -1,0 +1,53 @@
+local Object = require("Utils.classic")
+local EntityVfxBinder = require("Gameplay.Visuals.EntityVfxBinder")
+
+---@class ServantView 随从实体的场景视图（位置同步 / 动画 / VFX / 死亡清理）
+---血量、能量、buff 等信息由 ServantHUD 统一展示，不在实体上渲染。
+---@field go UnityEngine.GameObject
+---@field servantInstance ServantInstance
+local ServantView = Object:extend()
+
+---
+---@param go CS.UnityEngine.GameObject
+---@param servantInstance ServantInstance
+function ServantView:New(go, servantInstance)
+    self.go = go
+    self.servantInstance = servantInstance
+    self.animator = go:GetComponent(typeof(CS.UnityEngine.Animator))
+    self.paramMain = CS.UnityEngine.Animator.StringToHash("States")
+
+    local renderer = go:GetComponent(typeof(CS.UnityEngine.SpriteRenderer))
+    if renderer then
+        local GameManager = require("GameManager")
+        self.vfxBinder = EntityVfxBinder(renderer, go.transform, servantInstance, GameManager.vfxManager.spawner)
+    end
+end
+
+---@param param integer
+---@param value integer
+function ServantView:ModifyParameter(param, value)
+    local origin = self.animator:GetInteger(param)
+    if origin ~= value then
+        self.animator:SetInteger(param, value)
+    end
+end
+
+function ServantView:OnUpdate()
+    local after = CS.UnityEngine.Vector3(
+        self.servantInstance.position,
+        self.go.transform.position.y,
+        self.go.transform.position.z)
+    self.go.transform.position = after
+
+    self:ModifyParameter(self.paramMain, self.servantInstance.state)
+
+    if self.servantInstance:IsDead() then
+        CS.UnityEngine.Object.Destroy(self.go)
+    end
+end
+
+function ServantView:Dispose()
+    if self.vfxBinder then self.vfxBinder:Dispose() end
+end
+
+return ServantView

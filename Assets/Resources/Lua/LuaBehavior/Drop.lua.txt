@@ -1,0 +1,45 @@
+local GameManager = require "GameManager"
+
+---@type ItemInstance
+local itemInstance
+
+function SetItemInstance(itemInst)
+    itemInstance = itemInst
+end
+
+---
+---@param collider CS.UnityEngine.Collider2D
+function OnTriggerEnter2D(collider)
+    if collider:CompareTag("Player") then
+        ---@type PlayerInventory
+        local inventory = GameManager.player.inventory
+        ---@type ItemInstance
+        local old = inventory:GetSlot(itemInstance.item.equipmentSlot)
+
+        if not old then
+            --槽位为空：自动装备
+            inventory:Equip(itemInstance)
+            CS.UnityEngine.Object.Destroy(self.gameObject)
+        elseif itemInstance:GetPower() <= old:GetPower() then
+            --战力更低或相等：自动分解
+            inventory:DecomposeItem(itemInstance)
+            GameManager.uiManager:PopCrystal()
+            CS.UnityEngine.Object.Destroy(self.gameObject)
+        else
+            --战力更高：弹出对比面板，由 UIManager 排队显示
+            GameManager.uiManager:ShowEquipmentCompare(
+                old, itemInstance,
+                function()
+                    --玩家选择装备：装备新装备，分解旧装备
+                    inventory:Equip(itemInstance)
+                    inventory:DecomposeItem(old)
+                end,
+                function()
+                    --玩家选择分解：分解新装备
+                    inventory:DecomposeItem(itemInstance)
+                end
+            )
+            CS.UnityEngine.Object.Destroy(self.gameObject)
+        end
+    end
+end

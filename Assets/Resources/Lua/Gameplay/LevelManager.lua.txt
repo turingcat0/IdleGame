@@ -1,0 +1,451 @@
+local Object = require("Utils.classic")
+local EventSystem = require("Event.EventSystem")
+local EventType   = require("Event.EventType")
+local EnemyManager      = require("Gameplay.EnemyManager")
+local CombatManager     = require("Gameplay.CombatManager")
+local ProjectileSpawner = require("Gameplay.ProjectileSpawner")
+local EnemySpawner      = require("Gameplay.EnemySpawner")
+local ServantManager    = require("Gameplay.Entities.Servants.ServantManager")
+local StageConfigs      = require("Config.Generated.Stages")
+local WaveConfigs       = require("Config.Generated.Waves")
+local LogicScene        = require("Gameplay.LogicScene")
+
+---关卡战斗状态机枚举外移到 Gameplay.StageState，供 UI 层共享
+local StageState = require("Gameplay.StageState")
+
+---传送门相对玩家的偏移（放在玩家右侧屏幕外方向）
+local PortalOffset = 6
+---传送门相对最右掉落物的偏移（有掉落物时放在其右侧）
+local LootPortalOffset = 4
+
+---@class LevelManager 关卡战斗流程管理者，持有战斗相关的全部运行时组件
+---@field player Player
+---@field uiManager UIManager
+---@field taskScheduler TaskScheduler
+---@field enemyManager EnemyManager
+---@field servantManager ServantManager
+---@field combatManager CombatManager
+---@field projectileSpawner ProjectileSpawner
+---@field enemySpawner EnemySpawner
+---@field state StageState
+---@field waves table[] 当前关卡的波次配置列表（按 waveIndex 排序）
+---@field currentWaveIndex integer
+---@field lastWaveConfig table 最后一波配置（farming 用）
+---@field allWavesCompleted boolean
+---@field currentStageId string
+---@field bossInstance EnemyInstance?
+---@field logicScene LogicScene?
+local LevelManager = Object:extend()
+
+---@param player Player
+---@param uiManager UIManager
+---@param taskScheduler TaskScheduler
+function LevelManager:New(player, uiManager, taskScheduler)
+    self.player = player
+    self.uiManager = uiManager
+    self.taskScheduler = taskScheduler
+
+    --- 创建 owned 组件
+    self.enemyManager = EnemyManager()
+    self.projectileSpawner = ProjectileSpawner()
+    self.servantManager = ServantManager(player)
+    self.combatManager = CombatManager(
+        player, self.enemyManager, self.servantManager, self.projectileSpawner, uiManager)
+
+    local spawnPoint = CS.UnityEngine.GameObject.Find("EnemySpawnpoint")
+    local enemyRoot = CS.UnityEngine.GameObject.Find("Enemies")
+    self.enemySpawner = EnemySpawner(self.enemyManager, spawnPoint, enemyRoot)
+
+    --- 状态
+    self.state = StageState.WaitingStart
+    self.waves = {}
+    self.currentWaveIndex = 1
+    self.lastWaveConfig = nil
+    self.allWavesCompleted = false
+    self.currentStageId = nil
+    self.bossInstance = nil
+    self.portalX = nil
+    self.portalY = nil
+    self.settlement = nil
+    self.onTransitionMid = nil
+    self.onTransitionEnd = nil
+    self.runMode = "main"
+    self.mainRunSnapshot = nil
+    self.dungeonFailed = nil
+    self.logicScene = nil
+
+    EventSystem:RegisterListener(EventType.PlayerReachedBorder, nil, self, LevelManager.OnWorldWrap)
+    EventSystem:RegisterListener(EventType.EntityDied, player, self, LevelManager.OnPlayerDied)
+end
+
+---加载关卡波次配置（不改 state），供 StartStage 和过渡中点调用
+---@param stageId string
+function LevelManager:LoadStage(stageId)
+    self.currentStageId = stageId
+    self.waves = self:GetWavesForStage(stageId)
+    self.currentWaveIndex = 1
+    self.allWavesCompleted = false
+
+    local sc = StageConfigs[stageId]
+    if sc and sc.sceneId then
+        self.logicScene = LogicScene(sc.sceneId)
+    end
+end
+
+---进入关卡，加载波次配置，等待玩家 wakeup 后开始刷怪
+---@param stageId string
+function LevelManager:StartStage(stageId)
+    self:LoadStage(stageId)
+    if self.logicScene and self.logicScene.spawnY then
+        self.player.groundY = self.logicScene.spawnY
+    end
+    self.state = StageState.WaitingStart
+end
+
+---从 WaveConfigs 中筛选指定关卡的波次，按 waveIndex 排序
+---并把 difficulty 对齐到 stage.recommendedLevel，形成 R-2/R-1/R/R+1/R+2 的曲线
+---@param stageId string
+---@return table[]
+function LevelManager:GetWavesForStage(stageId)
+    local stageConfig = StageConfigs[stageId]
+    local recommendedLevel = stageConfig and stageConfig.recommendedLevel or 1
+
+    local result = {}
+    for _, wave in pairs(WaveConfigs) do
+        if wave.stageId == stageId then
+            wave.difficulty = math.max(1, recommendedLevel + (wave.waveIndex - 3))
+            table.insert(result, wave)
+        end
+    end
+    table.sort(result, function(a, b) return a.waveIndex < b.waveIndex end)
+    return result
+end
+
+---每帧驱动：spawner → enemyManager → combatManager → 状态机
+function LevelManager:OnUpdate()
+    if self.logicScene then
+        self.logicScene:CheckAndWrap(self.player)
+    end
+
+    --- 过渡中冻结战斗（boss 已生成但不出手，玩家 idle 不移动）
+    if self.state ~= StageState.Transitioning then
+        self.enemySpawner:OnUpdate()
+        self.enemyManager:OnUpdate()
+        self.servantManager:OnUpdate()
+        self.combatManager:OnUpdate()
+    end
+
+    if self.state == StageState.WaitingStart then
+        --- 玩家点击键 wakeup 后开始刷怪
+        if not self.player.idle then
+            if self.allWavesCompleted then
+                --- 死在 boss 战后回到 BossReady：继续 farming + 可重新点击进入 boss
+                self.state = StageState.BossReady
+                self.enemySpawner:StartWave(self.lastWaveConfig)
+            else
+                self.state = StageState.InProgress
+                self.enemySpawner:StartWave(self.waves[self.currentWaveIndex])
+            end
+        end
+
+    elseif self.state == StageState.InProgress then
+        if self.enemySpawner:IsWaveSpawnComplete() then
+            if self.currentWaveIndex < #self.waves then
+                --- 立即下一波，无间隔
+                local oldWaveIndex = self.currentWaveIndex
+                self.currentWaveIndex = self.currentWaveIndex + 1
+                EventSystem:FireEvent(EventType.WaveChanged, self, oldWaveIndex, self.currentWaveIndex)
+                self.enemySpawner:StartWave(self.waves[self.currentWaveIndex])
+            elseif self.enemyManager:Count() == 0 then
+                --- 最后一波生成完且全清 → BossReady
+                self.state = StageState.BossReady
+                self.lastWaveConfig = self.waves[#self.waves]
+                self.allWavesCompleted = true
+                EventSystem:FireEvent(EventType.AllWavesCleared, self)
+            end
+        end
+
+    elseif self.state == StageState.BossReady then
+        --- Farming：最后一波生成完且全清 → 重复刷
+        if self.enemySpawner:IsWaveSpawnComplete() and self.enemyManager:Count() == 0 then
+            self.enemySpawner:StartWave(self.lastWaveConfig)
+        end
+
+    elseif self.state == StageState.BossBattle then
+        --- boss 死亡 → 出口传送门过场 → 结算 → 下一关
+        if self.bossInstance and self.bossInstance:IsDead() then
+            EventSystem:FireEvent(EventType.BossDefeated, self.bossInstance, self.bossInstance)
+            self.bossInstance = nil
+            self:BeginAfterBoss()
+        end
+    --- BeforePortal / AfterBoss / Transitioning：回调驱动，无每帧逻辑
+    end
+end
+
+---玩家死亡 → 延迟 2 秒后重启当前波次
+function LevelManager:OnPlayerDied()
+    if self.runMode == "dungeon" then
+        self:ClearField()
+        self.player.idle = true
+        self.dungeonFailed = {stageId = self.currentStageId}
+        self.state = StageState.DungeonFailed
+        return
+    end
+    self.taskScheduler:Run(
+        CS.UnityEngine.Time.time + 2,
+        self,
+        LevelManager.Restart
+    )
+end
+
+---将玩家送回当前逻辑场景的出生点
+function LevelManager:TeleportToSpawn()
+    local ls = self.logicScene
+    self.portalX = ls and ls.spawnX or self.player.position
+    self.portalY = ls and ls.spawnY or self.player.groundY
+    self.player.position = ls and ls.spawnX or self.player.position
+    if ls and ls.spawnY then self.player.groundY = ls.spawnY end
+end
+
+---计算传送门 x 坐标：优先放在最右掉落物右侧，无掉落物则按原逻辑
+function LevelManager:ComputePortalX()
+    local baseX = self.player.position + PortalOffset
+    local rightmostLootX = self.uiManager:GetRightmostLootX()
+    if rightmostLootX then
+        return math.max(baseX, rightmostLootX + LootPortalOffset)
+    end
+    return baseX
+end
+
+---世界 wrap 事件：平移 portalX 保持传送门相对位置
+function LevelManager:OnWorldWrap(delta)
+    if self.portalX then
+        self.portalX = self.portalX + delta
+    end
+end
+
+---重启：复活 + Idle + 清场，从当前波次重新开始
+function LevelManager:Restart()
+    local ls = self.logicScene
+    self.player:Respawn(ls and ls.spawnX, ls and ls.spawnY)
+    self.player.idle = true
+    self.enemyManager:ClearAll()
+    self.servantManager:Reset()
+    self.combatManager:Reset()
+    self.projectileSpawner:Clear()
+
+    self.state = StageState.WaitingStart
+    --- currentWaveIndex / allWavesCompleted 不变：死在 boss 战后 wakeup 会进入 BossReady（farming + boss 按钮），由玩家手动重新进入
+end
+
+---玩家点击 boss 入口按钮 → 段1 入口传送门过场
+function LevelManager:EnterBoss()
+    self:BeginBeforePortal(
+        function() self:BossEntryMid() end,
+        function() self:BossEntryEnd() end
+    )
+end
+
+---进入副本：快照主线进度 → 切副本 → 入口传送门过场
+---@param stageId string
+function LevelManager:EnterDungeon(stageId)
+    if self.state == StageState.Transitioning then return end
+    --- 快照主线进度，通关/放弃后恢复
+    self.mainRunSnapshot = {
+        stageId = self.currentStageId,
+        waveIndex = self.currentWaveIndex,
+        allWavesCompleted = self.allWavesCompleted,
+        lastWaveConfig = self.lastWaveConfig,
+    }
+    self.runMode = "dungeon"
+    self:LoadStage(stageId)
+    self:BeginBeforePortal(
+        function() self:DungeonEntryMid() end,
+        function() self:DungeonEntryEnd() end
+    )
+    --- 唤醒玩家使其能跑向入口传送门
+    self.player.idle = false
+end
+
+---副本入口中点：送回出生点
+function LevelManager:DungeonEntryMid()
+    self:TeleportToSpawn()
+end
+
+---副本入口结束：唤醒玩家进入 WaitingStart，打完波次后点 EnterBoss 打 boss
+function LevelManager:DungeonEntryEnd()
+    self.servantManager:Reset()
+    self.player:WakeUp()
+    self.state = StageState.WaitingStart
+end
+
+---为当前关卡生成 boss
+function LevelManager:SpawnBossForCurrentStage()
+    local stageConfig = StageConfigs[self.currentStageId]
+    if not stageConfig then return end
+    self.bossInstance = self.enemySpawner:SpawnBoss(stageConfig.bossId, stageConfig.recommendedLevel)
+end
+
+---根据 stageId 命名规则推算下一关 id
+---@param stageId string
+---@return string?
+function LevelManager:GetNextStageId(stageId)
+    if self.runMode == "dungeon" then return nil end
+    local chapter, index = stageId:match("stage_(%d+)_(%d+)")
+    if not chapter then return nil end
+    local nextId = string.format("stage_%s_%d", chapter, tonumber(index) + 1)
+    if StageConfigs[nextId] then return nextId end
+    nextId = string.format("stage_%d_1", tonumber(chapter) + 1)
+    if StageConfigs[nextId] then return nextId end
+    return nil
+end
+
+---清场：停波 + 清敌 + 重置战斗 + 清弹道（过渡开始 / boss 死后调用）
+function LevelManager:ClearField()
+    self.enemySpawner:StopWave()
+    self.enemyManager:ClearAll()
+    self.combatManager:Reset()
+    self.projectileSpawner:Clear()
+end
+
+---段开始：清场 + 在玩家右侧生成传送门 + 进入等待状态
+---@param onMid function  fade 中点回调
+---@param onEnd function   fade 结束回调
+function LevelManager:BeginBeforePortal(onMid, onEnd)
+    self:ClearField()
+    self.portalX = self:ComputePortalX()
+    self.portalY = self.player.groundY
+    self.onTransitionMid = onMid
+    self.onTransitionEnd = onEnd
+    self.state = StageState.BeforePortal
+end
+
+---boss 死后：清场 + 在玩家右侧生成出口传送门 + 进入等待状态
+function LevelManager:BeginAfterBoss()
+    self:ClearField()
+    self.portalX = self:ComputePortalX()
+    self.portalY = self.player.groundY
+    self.onTransitionMid = function() self:StageAdvanceMid() end
+    self.onTransitionEnd = function() self:StageAdvanceEnd() end
+    self.state = StageState.AfterBoss
+end
+
+---玩家撞入传送门 → 进入黑屏过渡（玩家 idle 冻结）
+function LevelManager:OnPortalEntered()
+    if self.state == StageState.BeforePortal or self.state == StageState.AfterBoss then
+        --- 进传送门后才清掉落物，玩家有时间在传送门前捡东西
+        self.uiManager:ClearLoots()
+        self.state = StageState.Transitioning
+        self.player.idle = true
+    end
+end
+
+---fade-out 峰值：执行中点回调（生成 boss / 发放奖励 + 加载下一关）
+function LevelManager:OnFadeMidpoint()
+    if self.onTransitionMid then self.onTransitionMid() end
+end
+
+---玩家点「继续」→ 释放结算 hold → StageTransition 开始 fade-in
+function LevelManager:OnSettlementContinue()
+    self.settlement = nil
+end
+
+---fade-in 结束：执行结束回调（WakeUp / 切 WaitingStart）
+function LevelManager:OnFadeComplete()
+    local fn = self.onTransitionEnd
+    self.onTransitionMid = nil
+    self.onTransitionEnd = nil
+    self.settlement = nil
+    if fn then fn() end
+end
+
+---段1 中点：送回出生点（boss 在 BossEntryEnd 进入 BossBattle 后再生成，避免 EnemySpawnpoint 还停在旧坐标）
+function LevelManager:BossEntryMid()
+    self:TeleportToSpawn()
+end
+
+---段1 结束：生成 boss + 唤醒玩家 + 进入 boss 战
+function LevelManager:BossEntryEnd()
+    self:SpawnBossForCurrentStage()
+    self.servantManager:Reset()
+    self.player:WakeUp()
+    self.state = StageState.BossBattle
+end
+
+---段3 中点：发放当前关奖励 + 加载下一关 + 送回出生点 + 设结算面板
+function LevelManager:StageAdvanceMid()
+    local sc = StageConfigs[self.currentStageId]
+    if sc then
+        self.player:AddExp(sc.expReward)
+        self.player.inventory:AddCrystal(sc.crystalReward)
+        self.player.inventory:AddCoins(sc.coinReward)
+        self.settlement = {exp = sc.expReward, crystal = sc.crystalReward, coins = sc.coinReward}
+    end
+
+    if self.runMode == "dungeon" then
+        --- 副本通关：通知 DungeonManager 记录首通
+        EventSystem:FireEvent(EventType.DungeonCleared, self, self.currentStageId)
+        --- 恢复主线快照
+        local snap = self.mainRunSnapshot
+        if snap then
+            self:LoadStage(snap.stageId)
+            self.currentWaveIndex = snap.waveIndex
+            self.allWavesCompleted = snap.allWavesCompleted
+            if self.allWavesCompleted and self.waves and #self.waves > 0 then
+                self.lastWaveConfig = self.waves[#self.waves]
+            else
+                self.lastWaveConfig = snap.lastWaveConfig
+            end
+            self.mainRunSnapshot = nil
+        end
+        self.runMode = "main"
+        self:TeleportToSpawn()
+        self.servantManager:Reset()
+        return
+    end
+
+    local nextStageId = self:GetNextStageId(self.currentStageId)
+    if nextStageId then
+        self:LoadStage(nextStageId)
+    end
+    self:TeleportToSpawn()
+    self.servantManager:Reset()
+end
+
+---段3 结束：进入 WaitingStart（玩家 idle 等开局键），无下一关则回 BossReady
+function LevelManager:StageAdvanceEnd()
+    if self.currentStageId and self.waves and #self.waves > 0 then
+        self.state = StageState.WaitingStart
+    else
+        --- 最后一关无下一关：回到 farming
+        self.state = StageState.BossReady
+    end
+end
+
+---放弃副本：恢复主线快照 + 复活 + 清场 + 回 WaitingStart
+function LevelManager:AbortDungeon()
+    local snap = self.mainRunSnapshot
+    self:ClearField()
+    self.uiManager:ClearLoots()
+    self.player.idle = true
+    self.servantManager:Reset()
+
+    if snap then
+        self:LoadStage(snap.stageId)
+        self.currentWaveIndex = snap.waveIndex
+        self.allWavesCompleted = snap.allWavesCompleted
+        if self.allWavesCompleted and self.waves and #self.waves > 0 then
+            self.lastWaveConfig = self.waves[#self.waves]
+        else
+            self.lastWaveConfig = snap.lastWaveConfig
+        end
+        self.mainRunSnapshot = nil
+    end
+    local ls = self.logicScene
+    self.player:Respawn(ls and ls.spawnX, ls and ls.spawnY)
+    self.dungeonFailed = nil
+    self.runMode = "main"
+    self.state = StageState.WaitingStart
+end
+
+return LevelManager

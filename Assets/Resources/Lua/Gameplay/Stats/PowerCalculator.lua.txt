@@ -1,0 +1,51 @@
+local AttributeType = require("Gameplay.Stats.AttributeType")
+
+---@class PowerCalculator 战力计算模块
+---EHP + EDPS 双维度模型：将属性分为生存能力和输出能力，分别建模后加权合成
+local PowerCalculator = {}
+
+---可配置权重
+PowerCalculator.weights = {
+    survival = 1.0, -- 生存能力权重
+    dps = 1.5,      -- 输出能力权重（自动战斗中输出更高 = 更快击杀 = 更少受伤）
+    mana = 0.3,     -- 法力值权重（影响技能释放频率，间接贡献）
+}
+
+---每 DEF_SCALE 点防御使有效生命值翻倍
+PowerCalculator.defScale = 100
+
+---安全获取属性最终值
+---@param attributes table<AttributeType, Attribute>
+---@param attrType AttributeType
+---@return number
+local function GetAttrValue(attributes, attrType)
+    local attr = attributes[attrType]
+    return attr and attr:GetFinalValue() or 0
+end
+
+---计算战力
+---@param attributes table<AttributeType, Attribute>
+---@return number
+function PowerCalculator.Calculate(attributes)
+    local maxHealth   = GetAttrValue(attributes, AttributeType.MaxHealth)
+    local maxMana     = GetAttrValue(attributes, AttributeType.MaxMana)
+    local attack      = GetAttrValue(attributes, AttributeType.Attack)
+    local defense     = GetAttrValue(attributes, AttributeType.Defense)
+    local critChance  = GetAttrValue(attributes, AttributeType.CritChance)
+    local critDamage  = GetAttrValue(attributes, AttributeType.CritDamage)
+
+    -- 有效生命值：防御力提供减伤，转化为等效血量
+    local ehp = maxHealth * (1 + defense / PowerCalculator.defScale)
+
+    -- 暴击期望乘数：暴击率 × 暴击伤害 = 期望伤害加成
+    local critFactor = 1 + critChance * critDamage
+
+    -- 有效输出：攻击力乘以暴击期望
+    local edps = attack * critFactor
+
+    return ehp * PowerCalculator.weights.survival
+         + edps * PowerCalculator.weights.dps
+         + maxMana * PowerCalculator.weights.mana
+end
+
+return PowerCalculator

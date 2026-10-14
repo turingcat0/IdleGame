@@ -1,0 +1,32 @@
+local Object = require("Utils.classic")
+
+---@class Item 物品(原型)类
+---@field id string
+---@field name string
+---@field equipmentSlot EquipmentSlot
+---@field equipmentEffect EquipmentEffect
+---@field rarity Rarity
+---@field equipmentSet EquipmentSet
+---@field tags string 这个留着以后扩展功能
+local Item = Object:extend()
+
+---
+---@param id string
+---@param name string
+---@param equipmentSlot EquipmentSlot
+---@param rarity Rarity
+---@param tags string
+---@param equipmentEffect EquipmentEffect
+---@param equipmentSet EquipmentSet
+function Item:New(id, name, equipmentSlot, rarity, tags, equipmentEffect, equipmentSet)
+    self.id = id
+    self.name = name
+    self.rarity = rarity
+    self.tags = tags
+    self.equipmentSlot = equipmentSlot
+    self.equipmentEffect = equipmentEffect
+    self.equipmentSet = equipmentSet
+end
+
+
+return Item

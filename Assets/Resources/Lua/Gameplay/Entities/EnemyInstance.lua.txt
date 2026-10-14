@@ -1,0 +1,92 @@
+local Entity = require("Gameplay.Entities.Entity")
+local utils  = require("Utils.utils")
+local EntityState = require("Gameplay.Entities.EntityState")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+local EventSystem = require("Event.EventSystem")
+local EventType   = require("Event.EventType")
+local BalanceConfig = require("Gameplay.Stats.BalanceConfig")
+
+---@class EnemyInstance : Entity
+---@field enemy Enemy
+---@field level integer
+---@field state EntityState
+---@field attributes table<AttributeType, Attribute>
+---@field skill Skill
+---@field isBoss boolean
+local EnemyInstance = Entity:extend()
+
+
+---@param enemy Enemy
+---@param level integer
+function EnemyInstance:New(enemy, level, position)
+    EnemyInstance.super.New(self)
+    self.enemy = enemy
+    self.level = level
+    self.position = position
+    self.isBoss = enemy.isBoss or false
+    self.attributes = utils.DeepCopy(enemy.attributes)
+    --- 敌人从右侧向玩家推进
+    self.facing = -1
+    table.insert(self.tags, "enemy")
+    self:ApplyLevelToAttributes(level)
+    self:InitHealth()
+
+    -- 敌人默认使用敌人配置的技能作为普通攻击 / 战斗意图
+    self.normalSkill = enemy.skill
+    self.skillIntent = enemy.skill
+    self.signatureSkills = {}
+end
+
+function EnemyInstance:OnUpdate()
+    EnemyInstance.super.OnUpdate(self)
+
+    --- 尸体不再行动：基类的早退只能中断基类那一段，子类要自己拦一次
+    if self:IsDead() then return end
+
+    -- lazy require 避免与 GameManager/LevelManager 形成循环依赖
+    local GameManager = require("GameManager")
+
+    ---@type CombatManager
+    local combatManager = GameManager.levelManager.combatManager
+
+    -- 晕眩时不能行动、不能移动（击退仍由基类处理）
+    if self.stunned then
+        self.state = EntityState.ExlusiveEffect
+        self.moveSpeed = 0
+    else
+        local hasGoal = combatManager:HasGoal(self, self.enemy.skill)
+
+        if hasGoal then
+            self.state = EntityState.Attacking
+        else
+            self.state = EntityState.Walking
+        end
+
+        if self:IsKnockback() then
+            self.moveSpeed = 0
+        elseif hasGoal then
+            self.moveSpeed = 0
+            self:TryCast()
+        else
+            self.moveSpeed = self.attributes[AttributeType.Speed]:GetFinalValue()
+        end
+    end
+
+    self:Move()
+end
+
+
+---计算下等级对于属性的影响
+---@param level integer
+function EnemyInstance:ApplyLevelToAttributes(level)
+    -- 由 BalanceConfig 按玩家预计战力比例生成，替换硬编码的 base * (2L-1)
+    local stats = BalanceConfig.GetEnemyStats(self.enemy, level)
+    for attrType, value in pairs(stats) do
+        local attr = self.attributes[attrType]
+        if attr then
+            attr:SetBaseValue(value)
+        end
+    end
+end
+
+return EnemyInstance

@@ -1,0 +1,127 @@
+local GameManager   = require("GameManager")
+local EventSystem   = require("Event.EventSystem")
+local EventType     = require("Event.EventType")
+local Chapters      = require("Config.Generated.Chapters")
+local Stages        = require("Config.Generated.Stages")
+
+---@type CS.UnityEngine.MonoBehaviour
+local self = self
+
+local progressText = nil
+local waveText     = nil
+local bossButton   = nil
+
+local StageState  = require("Gameplay.StageState")
+
+function Awake()
+    local progressTf = self.transform:Find("ProgressText")
+    if progressTf then
+        progressText = progressTf:GetComponent(typeof(CS.TMPro.TextMeshProUGUI))
+    end
+
+    local waveTf = self.transform:Find("WaveText")
+    if waveTf then
+        waveText = waveTf:GetComponent(typeof(CS.TMPro.TextMeshProUGUI))
+    end
+
+    local bossBtnTf = self.transform:Find("BossButton")
+    if bossBtnTf then
+        bossButton = bossBtnTf:GetComponent(typeof(CS.UnityEngine.UI.Button))
+    end
+
+    if bossButton then
+        bossButton.onClick:AddListener(OnEnterBossClicked)
+        bossButton.gameObject:SetActive(false)
+    end
+end
+
+function Start()
+    EventSystem:RegisterListener(EventType.AllWavesCleared, nil, nil, OnAllWavesCleared)
+    EventSystem:RegisterListener(EventType.BossSpawned, nil, nil, OnBossSpawned)
+    EventSystem:RegisterListener(EventType.BossDefeated, nil, nil, OnBossDefeated)
+end
+
+function Update()
+    local lm = GameManager.levelManager
+    if not lm or not lm.currentStageId then return end
+
+    --- 先查 stage 配置，主线和副本都能拿到 name / type
+    local stageConfig = Stages[lm.currentStageId]
+    local stageName = (stageConfig and stageConfig.name) or lm.currentStageId
+
+    --- 解析章节：主线 stageId = "stage_1_2"，副本 = "dungeon_exp_1" 等
+    local chapterName
+    local chapterNum = lm.currentStageId:match("stage_(%d+)_")
+    if chapterNum then
+        local chapterKey = "chapter_" .. chapterNum
+        local chapterConfig = Chapters[chapterKey]
+        chapterName = (chapterConfig and chapterConfig.name) or ("第" .. chapterNum .. "章")
+    elseif stageConfig and stageConfig.type == "dungeon" then
+        chapterName = "副本"
+    else
+        chapterName = ""
+    end
+
+    if progressText then
+        progressText.text = string.format("%s › %s", chapterName, stageName)
+    end
+
+    --- 波次：boss 战时隐藏
+    local inBossBattle = (lm.state == StageState.BossBattle)
+    if waveText then
+        if inBossBattle then
+            if waveText.gameObject.activeSelf then
+                waveText.gameObject:SetActive(false)
+            end
+        else
+            if not waveText.gameObject.activeSelf then
+                waveText.gameObject:SetActive(true)
+            end
+            local currentWave = lm.currentWaveIndex or 1
+            local totalWaves = (lm.waves and #lm.waves) or 0
+            waveText.text = string.format("波次 %d/%d", currentWave, totalWaves)
+        end
+    end
+
+    --- Boss button visibility: show only when in BossReady state
+    if bossButton then
+        local shouldShow = (lm.state == StageState.BossReady)
+        if bossButton.gameObject.activeSelf ~= shouldShow then
+            bossButton.gameObject:SetActive(shouldShow)
+        end
+    end
+end
+
+function OnEnterBossClicked()
+    local lm = GameManager.levelManager
+    if lm and lm.state == StageState.BossReady then
+        lm:EnterBoss()
+    end
+end
+
+function OnAllWavesCleared()
+    if bossButton then
+        bossButton.gameObject:SetActive(true)
+    end
+end
+
+function OnBossSpawned()
+    if bossButton then
+        bossButton.gameObject:SetActive(false)
+    end
+end
+
+function OnBossDefeated()
+    if bossButton then
+        bossButton.gameObject:SetActive(false)
+    end
+end
+
+function OnDestroy()
+    if bossButton then
+        bossButton.onClick:RemoveListener(OnEnterBossClicked)
+    end
+    EventSystem:RemoveListener(EventType.AllWavesCleared, nil, nil, OnAllWavesCleared)
+    EventSystem:RemoveListener(EventType.BossSpawned, nil, nil, OnBossSpawned)
+    EventSystem:RemoveListener(EventType.BossDefeated, nil, nil, OnBossDefeated)
+end

@@ -1,0 +1,96 @@
+local Object = require("Utils.classic")
+local EventSystem = require("Event.EventSystem")
+local EventType = require("Event.EventType")
+
+---@class VfxSpawner
+---@field prefabs table<string, CS.UnityEngine.GameObject|false>  vfxId → prefab（false=已确认缺失，避免重复 Load）
+---@field root CS.UnityEngine.Transform
+---@field effectY number 特效所在的世界Y，与战斗线对齐
+local VfxSpawner = Object:extend()
+
+function VfxSpawner:New()
+    self.prefabs = {}
+    local rootGo = CS.UnityEngine.GameObject.Find("Vfx")
+    self.root = rootGo and rootGo.transform or nil
+    self.effectY = -21
+    EventSystem:RegisterListener(EventType.PlayerReachedBorder, nil, self, VfxSpawner.OnWorldWrap)
+end
+
+---按 id 加载并实例化一个特效 prefab。prefab 路径约定：Prefabs/Vfx/<id>。
+---约定优先于注册：文件存在才播，缺失则静默跳过（缺失结果也缓存，不重复 Load）。
+---生命周期由 prefab 自管（ParticleSystem StopAction=Destroy 或 Animator 一次性播完自毁）。
+---@param id string
+---@param originX number
+function VfxSpawner:Spawn(id, originX)
+    local prefab = self.prefabs[id]
+    if prefab == nil then
+        prefab = CS.UnityEngine.Resources.Load("Prefabs/Vfx/"..id, typeof(CS.UnityEngine.GameObject))
+        prefab = prefab or false
+        self.prefabs[id] = prefab
+    end
+    if not prefab then return end
+    ---@type CS.UnityEngine.GameObject
+    local go = CS.UnityEngine.Object.Instantiate(prefab, self.root)
+    local y = self.effectY
+    local lm = require("GameManager").levelManager
+    if lm and lm.logicScene and lm.logicScene.spawnY then
+        y = lm.logicScene.spawnY
+    end
+    go.transform.position = CS.UnityEngine.Vector3(originX, y, 0)
+end
+
+---实例化一个跟随目标的循环特效，生命周期由调用方管理。
+---prefab 路径约定同样为 Prefabs/Vfx/<id>。
+---@param id string
+---@param followTransform CS.UnityEngine.Transform
+---@param entity Entity? 用于区分玩家/仆从，仆从需要额外抵消缩放和 y 归零
+---@return CS.UnityEngine.GameObject?
+function VfxSpawner:SpawnFollow(id, followTransform, entity)
+    local prefab = self.prefabs[id]
+    if prefab == nil then
+        prefab = CS.UnityEngine.Resources.Load("Prefabs/Vfx/"..id, typeof(CS.UnityEngine.GameObject))
+        prefab = prefab or false
+        self.prefabs[id] = prefab
+    end
+    if not prefab then return nil end
+    local go = CS.UnityEngine.Object.Instantiate(prefab, followTransform)
+
+    -- 只有仆从需要抵消父物体缩放并把本地 y 归零
+    local isServant = false
+    if entity and entity.tags then
+        for _, tag in ipairs(entity.tags) do
+            if tag == "servant" then
+                isServant = true
+                break
+            end
+        end
+    end
+
+    if isServant then
+        -- 抵消父物体缩放，让跟随特效按 prefab 原本尺寸显示（仆从 scale 6 就乘 1/6）
+        local parentScale = followTransform.lossyScale
+        local localScale = go.transform.localScale
+        go.transform.localScale = CS.UnityEngine.Vector3(
+            parentScale.x ~= 0 and localScale.x / parentScale.x or localScale.x,
+            parentScale.y ~= 0 and localScale.y / parentScale.y or localScale.y,
+            parentScale.z ~= 0 and localScale.z / parentScale.z or localScale.z
+        )
+        -- 跟随特效的本地 y 归零，避免 prefab 自身 y 偏移导致位置不对
+        local localPos = go.transform.localPosition
+        go.transform.localPosition = CS.UnityEngine.Vector3(localPos.x, 0, localPos.z)
+    end
+
+    return go
+end
+
+---世界 wrap 事件：平移所有位置型特效的 Transform
+function VfxSpawner:OnWorldWrap(delta)
+    if not self.root then return end
+    for i = 0, self.root.childCount - 1 do
+        local child = self.root:GetChild(i)
+        local p = child.position
+        child.position = CS.UnityEngine.Vector3(p.x + delta, p.y, p.z)
+    end
+end
+
+return VfxSpawner

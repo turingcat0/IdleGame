@@ -1,0 +1,86 @@
+local Object = require("Utils.classic")
+local ModifierType = require("Gameplay.Stats.ModifierType")
+local EventSystem  = require("Event.EventSystem")
+
+---@class Attribute 属性
+---@field baseValue number
+---@field modifiers table<string, Modifier[]>
+---@field dirty boolean
+local Attribute = Object:extend()
+
+---
+---@param baseValue number
+function Attribute:New(baseValue)
+    self.baseValue = baseValue
+    self.modifiers = {}
+    self.dirty = true
+end
+
+---获得基础数值
+---@return number
+function Attribute:GetBaseValue()
+    return self.baseValue
+end
+
+---设置基础数值
+---@param value number
+function Attribute:SetBaseValue(value)
+    self.baseValue = value
+    self.dirty = true
+    EventSystem:FireAttributeChangedEvent(self)
+end
+
+---获得最终数值
+---@return number
+function Attribute:GetFinalValue()
+    if not self.dirty then
+        return self.cache
+    end
+
+    local finalValue = self.baseValue
+    --这里的顺序先硬编码下
+    --先加后乘
+    for _, modifierList in pairs(self.modifiers) do
+        for _, modifier in ipairs(modifierList) do
+            if modifier.modifierType == ModifierType.FlatAdd then
+                finalValue = modifier:Apply(finalValue)
+            end
+        end
+    end
+    for _, modifierList in pairs(self.modifiers) do
+        for _, modifier in ipairs(modifierList) do
+            if modifier.modifierType == ModifierType.Multiply then
+                finalValue = modifier:Apply(finalValue)
+            end
+        end
+    end
+    self.dirty = false
+    self.cache = finalValue
+    return finalValue
+end
+
+---添加属性修改器
+---@param source string
+---@param modifier Modifier
+function Attribute:AddModifier(source, modifier)
+    if not self.modifiers[source] then
+        self.modifiers[source] = {}
+    end
+    table.insert(self.modifiers[source], modifier)
+    self.dirty = true
+    EventSystem:FireAttributeChangedEvent(self)
+end
+
+---移除属性修改器
+---@param source string
+function Attribute:RemoveModifier(source)
+    self.modifiers[source] = nil
+    self.dirty = true
+    EventSystem:FireAttributeChangedEvent(self)
+end
+
+function Attribute:HasModifierFrom(source)
+    return self.modifiers[source] ~= nil
+end
+
+return Attribute

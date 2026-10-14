@@ -1,0 +1,256 @@
+local AttributeType = require("Gameplay.Stats.AttributeType")
+local EquipmentSlot = require("Gameplay.Items.EquipmentSlot")
+
+---@class BalanceConfig 数值平衡配置中心
+---所有装备、怪物、仆从、玩家预计属性都从这里取，保证一套公式驱动
+local BalanceConfig = {}
+
+---玩家最大等级：主线结束约 100，留 50 级给后期/副本/重复刷
+BalanceConfig.MAX_PLAYER_LEVEL = 150
+
+---经验公式：expToNextLevel(L) = EXP_BASE + EXP_PER_LEVEL * (L-1)
+BalanceConfig.EXP_BASE = 150
+BalanceConfig.EXP_PER_LEVEL = 30
+
+---稀有度数据：等级区间 1-10/11-20/.../51-60 对应 Common..Mythic（之后保持 Mythic）
+local RARITY_DATA = {
+    { name = "Common",     multiplier = 1,   defense = 30 },
+    { name = "Uncommon",   multiplier = 2,   defense = 42 },
+    { name = "Rare",       multiplier = 4,   defense = 54 },
+    { name = "Epic",       multiplier = 8,   defense = 66 },
+    { name = "Legendary",  multiplier = 16,  defense = 78 },
+    { name = "Mythic",     multiplier = 32,  defense = 90 },
+}
+
+---装备等级成长因子（保留现有公式）
+local function ItemLevelFactor(level)
+    return 0.3 * level + 0.7
+end
+
+---根据玩家等级得到装备稀有度索引（1-6）
+function BalanceConfig.GetRarityIndex(level)
+    return math.min(6, math.max(1, math.floor((level - 1) / 10) + 1))
+end
+
+function BalanceConfig.GetRarityData(level)
+    return RARITY_DATA[BalanceConfig.GetRarityIndex(level)]
+end
+
+---玩家裸体属性（对应 progression.lua 的公式）
+function BalanceConfig.GetPlayerBaseStats(level)
+    local L = math.min(math.max(level, 1), BalanceConfig.MAX_PLAYER_LEVEL)
+    return {
+        maxHealth  = 100 + 5 * (L - 1),
+        maxMana    = 50 + (L - 1),
+        defense    = 50 + (L - 1),
+        attack     = 10 + (L - 1),
+        speed      = 1,
+        critChance = 0.05 + 0.0001 * (L - 1),
+        critDamage = 0.50 + 0.01 * (L - 1),
+        lifesteal  = 0.1,
+        expToNextLevel = BalanceConfig.EXP_BASE + BalanceConfig.EXP_PER_LEVEL * (L - 1),
+    }
+end
+
+---下一级所需经验
+function BalanceConfig.GetExpToNextLevel(level)
+    return BalanceConfig.EXP_BASE + BalanceConfig.EXP_PER_LEVEL * (level - 1)
+end
+
+---Common 1 级各槽位基础属性模板
+---HP/Atk/Mana 会随等级和稀有度放大；Def/Crit/Speed 只随稀有度（Def）或固定
+local SLOT_TEMPLATE = {
+    [EquipmentSlot.MainHand]   = { hp = 0,  atk = 20, mana = 15, def = 0, critC = 0,    critD = 0.05, spd = 0 },
+    [EquipmentSlot.OffHand]    = { hp = 40, atk = 0,  mana = 5,  def = 8, critC = 0,    critD = 0,    spd = 0 },
+    [EquipmentSlot.Helmet]     = { hp = 25, atk = 0,  mana = 5,  def = 5, critC = 0,    critD = 0,    spd = 0 },
+    [EquipmentSlot.Chestplate] = { hp = 70, atk = 0,  mana = 5,  def = 8, critC = 0,    critD = 0,    spd = 0 },
+    [EquipmentSlot.Leggings]   = { hp = 40, atk = 0,  mana = 5,  def = 5, critC = 0,    critD = 0,    spd = 0 },
+    [EquipmentSlot.Boots]      = { hp = 25, atk = 0,  mana = 0,  def = 4, critC = 0,    critD = 0,    spd = 0 },
+    [EquipmentSlot.Accessory]  = { hp = 0,  atk = 8,  mana = 15, def = 0, critC = 0.03, critD = 0,    spd = 0 },
+    [EquipmentSlot.Necklace]   = { hp = 0,  atk = 7,  mana = 10, def = 0, critC = 0.02, critD = 0.05, spd = 0 },
+}
+
+---单件装备在指定稀有度、等级下的属性（不乘玩家裸体属性）
+function BalanceConfig.GetItemBaseStats(slot, rarityIndex, level)
+    local tpl = SLOT_TEMPLATE[slot] or SLOT_TEMPLATE[EquipmentSlot.MainHand]
+    local rarity = RARITY_DATA[rarityIndex] or RARITY_DATA[1]
+    local f = ItemLevelFactor(level)
+    local defFactor = rarity.defense / 30  -- Common 套装总防御为 30
+    return {
+        [AttributeType.MaxHealth]  = tpl.hp * rarity.multiplier * f,
+        [AttributeType.MaxMana]    = tpl.mana * rarity.multiplier * f,
+        [AttributeType.Attack]     = tpl.atk * rarity.multiplier * f,
+        [AttributeType.Defense]    = math.floor(tpl.def * defFactor + 0.5),
+        [AttributeType.CritChance] = tpl.critC,
+        [AttributeType.CritDamage] = tpl.critD,
+        [AttributeType.Speed]      = tpl.spd,
+    }
+end
+
+---把 ItemInstance 的属性覆写为平衡后的数值
+function BalanceConfig.ApplyItemStats(itemInstance, level)
+    local item = itemInstance.item
+    local rarityIndex = item.rarity
+    local slot = item.equipmentSlot
+    local stats = BalanceConfig.GetItemBaseStats(slot, rarityIndex, level)
+    for attrType, value in pairs(stats) do
+        local attr = itemInstance.equipmentEffect.attributes[attrType]
+        if attr then
+            attr:SetBaseValue(value)
+        end
+    end
+end
+
+---玩家穿上当前等级全套预计装备后的总属性
+function BalanceConfig.GetTargetPlayerStats(level)
+    local base = BalanceConfig.GetPlayerBaseStats(level)
+    local rarityIndex = BalanceConfig.GetRarityIndex(level)
+
+    local total = {
+        maxHealth = base.maxHealth,
+        maxMana   = base.maxMana,
+        defense   = base.defense,
+        attack    = base.attack,
+        critChance = base.critChance,
+        critDamage = base.critDamage,
+    }
+
+    for slot = EquipmentSlot.MainHand, EquipmentSlot.Necklace do
+        local itemStats = BalanceConfig.GetItemBaseStats(slot, rarityIndex, level)
+        total.maxHealth = total.maxHealth + (itemStats[AttributeType.MaxHealth] or 0)
+        total.maxMana   = total.maxMana   + (itemStats[AttributeType.MaxMana] or 0)
+        total.defense   = total.defense   + (itemStats[AttributeType.Defense] or 0)
+        total.attack    = total.attack    + (itemStats[AttributeType.Attack] or 0)
+        total.critChance = total.critChance + (itemStats[AttributeType.CritChance] or 0)
+        total.critDamage = total.critDamage + (itemStats[AttributeType.CritDamage] or 0)
+    end
+
+    total.speed = base.speed
+    total.lifesteal = base.lifesteal
+    total.expToNextLevel = base.expToNextLevel
+    return total
+end
+
+---战力辅助：从 GetTargetPlayerStats 返回的表计算战力
+function BalanceConfig.CalculatePower(stats)
+    local ehp = stats.maxHealth * (1 + stats.defense / 100)
+    local edps = stats.attack * (1 + stats.critChance * stats.critDamage)
+    return ehp + edps * 1.5 + stats.maxMana * 0.3
+end
+
+---指定等级的预计战力
+function BalanceConfig.GetExpectedPower(level)
+    return BalanceConfig.CalculatePower(BalanceConfig.GetTargetPlayerStats(level))
+end
+
+---怪物类型映射（CSV 未生成前兜底）
+local ENEMY_TYPES = {
+    dino     = "normal",
+    dog      = "normal",
+    opossum  = "normal",
+    bat      = "normal",
+    bear     = "elite",
+    eagle    = "elite",
+    boss_1   = "boss",
+    boss_2   = "boss",
+    boss_3   = "boss",
+    boss_4   = "boss",
+    boss_5   = "boss",
+    boss_6   = "boss",
+}
+
+local ENEMY_COEFFICIENTS = {
+    normal = { hp = 0.35, atk = 0.28, def = 0.40, exp = 0.04 },
+    elite  = { hp = 0.55, atk = 0.45, def = 0.60, exp = 0.06 },
+    boss   = { hp = 0.95, atk = 0.55, def = 1.00, exp = 0.30 },
+}
+
+function BalanceConfig.GetEnemyType(enemyId)
+    return ENEMY_TYPES[enemyId] or "normal"
+end
+
+---怪物属性：按玩家预计属性比例生成
+function BalanceConfig.GetEnemyStats(enemy, level)
+    local enemyId = enemy.id
+    local enemyType = (enemy.enemyType and ENEMY_COEFFICIENTS[enemy.enemyType] and enemy.enemyType)
+                      or BalanceConfig.GetEnemyType(enemyId)
+    local coeff = ENEMY_COEFFICIENTS[enemyType] or ENEMY_COEFFICIENTS.normal
+
+    local playerStats = BalanceConfig.GetTargetPlayerStats(level)
+    local ehp = playerStats.maxHealth * (1 + playerStats.defense / 100)
+    local edps = playerStats.attack * (1 + playerStats.critChance * playerStats.critDamage)
+
+    local def = math.floor(playerStats.defense * coeff.def + 0.5)
+    local hp = math.floor(ehp * coeff.hp / (1 + def / 100) + 0.5)
+
+    -- 暴击率/暴击伤害取配置原型，不随等级放大
+    local critChance = enemy.attributes[AttributeType.CritChance]:GetBaseValue()
+    local critDamage = enemy.attributes[AttributeType.CritDamage]:GetBaseValue()
+    local critFactor = 1 + critChance * critDamage
+    local atk = math.floor(edps * coeff.atk / critFactor + 0.5)
+
+    local expReward = math.floor(BalanceConfig.GetExpToNextLevel(level) * coeff.exp)
+
+    return {
+        [AttributeType.MaxHealth]  = hp,
+        [AttributeType.Defense]    = def,
+        [AttributeType.Attack]     = atk,
+        [AttributeType.MaxMana]    = 0,
+        [AttributeType.CritChance] = critChance,
+        [AttributeType.CritDamage] = critDamage,
+        [AttributeType.Speed]      = enemy.attributes[AttributeType.Speed]:GetBaseValue(),
+        [AttributeType.ExpReward]  = expReward,
+    }
+end
+
+---怪物击杀经验（SweepResolver 用）
+function BalanceConfig.GetEnemyExpReward(enemyId, level)
+    local enemyType = BalanceConfig.GetEnemyType(enemyId)
+    local coeff = ENEMY_COEFFICIENTS[enemyType] or ENEMY_COEFFICIENTS.normal
+    return math.floor(BalanceConfig.GetExpToNextLevel(level) * coeff.exp)
+end
+
+---仆从职业模板
+local SERVANT_ARCHETYPES = {
+    guard     = { hp = 1.20, def = 1.10, atk = 0.80, speed = 3.2, lifesteal = 0.06 },
+    paladin   = { hp = 1.20, def = 1.10, atk = 0.80, speed = 2.9, lifesteal = 0.05 },
+    ranger    = { hp = 0.90, def = 1.00, atk = 1.20, speed = 3.0, lifesteal = 0.03 },
+    crusher   = { hp = 0.95, def = 1.00, atk = 1.15, speed = 2.7, lifesteal = 0.04 },
+    mage      = { hp = 0.85, def = 1.00, atk = 1.10, speed = 2.8, lifesteal = 0.02 },
+    cleric    = { hp = 0.90, def = 1.00, atk = 0.70, speed = 2.5, lifesteal = 0.08 },
+    berserker = { hp = 0.80, def = 1.00, atk = 1.30, speed = 3.1, lifesteal = 0.025 },
+    rogue     = { hp = 0.85, def = 1.00, atk = 1.25, speed = 3.5, lifesteal = 0.035 },
+}
+
+---仆从等级 S 对应玩家等级 L = S * 10
+---生存能力（EHP）与玩家同级相当，输出（EDPS）为玩家的 25%
+function BalanceConfig.GetServantBaseStats(servantId, level)
+    local S = math.min(math.max(level, 1), 10)
+    local archetype = SERVANT_ARCHETYPES[servantId] or SERVANT_ARCHETYPES.guard
+    local playerLevel = S * 10
+    local playerStats = BalanceConfig.GetTargetPlayerStats(playerLevel)
+
+    local playerEHP = playerStats.maxHealth * (1 + playerStats.defense / 100)
+    local playerEDPS = playerStats.attack * (1 + playerStats.critChance * playerStats.critDamage)
+
+    -- 生存能力对标玩家，输出约 25%
+    local targetEHP = playerEHP * archetype.hp
+    local targetDef = playerStats.defense * archetype.def
+    local targetEDPS = playerEDPS * archetype.atk * 0.25
+
+    local hp = math.floor(targetEHP / (1 + targetDef / 100) + 0.5)
+    local atk = math.floor(targetEDPS / (1 + playerStats.critChance * playerStats.critDamage) + 0.5)
+
+    return {
+        [AttributeType.MaxHealth]  = hp,
+        [AttributeType.Defense]    = math.floor(targetDef + 0.5),
+        [AttributeType.Attack]     = atk,
+        [AttributeType.MaxMana]    = 10 + (S - 1) * 2,
+        [AttributeType.Speed]      = archetype.speed,
+        [AttributeType.CritChance] = playerStats.critChance,
+        [AttributeType.CritDamage] = playerStats.critDamage,
+        [AttributeType.Lifesteal]  = archetype.lifesteal,
+    }
+end
+
+return BalanceConfig

@@ -1,0 +1,18 @@
+local Skill = require("Gameplay.Skills.Skill")
+local EffectTypes = require("Config.Generated.EffectTypes")
+local EffectFactory = require("Gameplay.Effects.EffectFactory")
+
+---@class FuryImpact : Skill
+---毁灭冲击：命中时眩晕目标（0.8秒）
+local FuryImpact = Skill:extend()
+
+function FuryImpact:OnCast(source, target)
+end
+
+function FuryImpact:OnHit(source, target, ctx)
+    if not target then return end
+    local instance = EffectFactory.CreateInstance(EffectTypes.stun, target, source, 0.8)
+    target:AddEffect(instance)
+end
+
+return FuryImpact

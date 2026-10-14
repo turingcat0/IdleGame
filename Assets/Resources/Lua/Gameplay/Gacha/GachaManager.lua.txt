@@ -1,0 +1,152 @@
+local Object = require("Utils.classic")
+local EventSystem = require("Event.EventSystem")
+local EventType = require("Event.EventType")
+local Servants = require("Gameplay.Entities.Servants.Servants")
+
+---单抽固定消耗
+local SINGLE_COST = 500
+---十连固定消耗（约 9 折）
+local TEN_COST = 4500
+
+---保底阈值：连续 N 抽重复后，下次必出新随从
+local PITY_THRESHOLD = 30
+
+---重复获得时固定补偿精魄
+local DUPE_ESSENCE_REWARD = 30
+
+---@class GachaManager 随从抽奖系统
+---@field player Player
+---@field pityCounter integer 连续重复次数
+---@field totalDraws integer 累计抽奖次数
+---@field pool table[] 奖池：{ servant = Servant, weight = int }
+local GachaManager = Object:extend()
+
+function GachaManager:New()
+    self.player = nil
+    self.pityCounter = 0
+    self.totalDraws = 0
+    self.pool = {}
+end
+
+---@param player Player
+function GachaManager:Init(player)
+    self.player = player
+    self:BuildPool()
+end
+
+---从 Servants 注册表构建奖池，所有随从等权重
+function GachaManager:BuildPool()
+    self.pool = {}
+    for _, servant in ipairs(Servants.servants) do
+        table.insert(self.pool, {
+            servant = servant,
+            weight = 10,
+        })
+    end
+end
+
+---单抽消耗
+---@return integer
+function GachaManager:GetSingleCost()
+    return SINGLE_COST
+end
+
+---十连消耗
+---@return integer
+function GachaManager:GetTenCost()
+    return TEN_COST
+end
+
+---@return integer
+function GachaManager:GetPityCounter()
+    return self.pityCounter
+end
+
+---@return integer
+function GachaManager:GetPityThreshold()
+    return PITY_THRESHOLD
+end
+
+---保底进度 0~1
+---@return number
+function GachaManager:GetPityProgress()
+    return self.pityCounter / PITY_THRESHOLD
+end
+
+---@param times integer 1 或 10
+---@return table[]? results 抽奖结果列表，nil 表示金币不足
+function GachaManager:Draw(times)
+    local cost = times == 10 and self:GetTenCost() or self:GetSingleCost()
+    if not self.player.inventory:SpendCoins(cost) then
+        return nil
+    end
+
+    local results = {}
+    for _ = 1, times do
+        self.totalDraws = self.totalDraws + 1
+
+        local entry = self:Roll()
+        local loadout = self.player.servantLoadout
+        local isDupe = loadout:IsUnlocked(entry.servant.id)
+
+        if isDupe then
+            self.pityCounter = self.pityCounter + 1
+            self.player.inventory:AddEssence(DUPE_ESSENCE_REWARD)
+        else
+            self.pityCounter = 0
+            loadout:Unlock(entry.servant.id)
+        end
+
+        EventSystem:FireEvent(EventType.ServantAcquired, self, entry.servant.id, isDupe)
+        table.insert(results, {
+            servantId = entry.servant.id,
+            isDupe = isDupe,
+        })
+    end
+
+    return results
+end
+
+---执行一次加权随机；如果保底触发则强制出新随从
+---@return table entry
+function GachaManager:Roll()
+    if self.pityCounter >= PITY_THRESHOLD then
+        local entry = self:WeightedRoll(function(e) return not self.player.servantLoadout:IsUnlocked(e.servant.id) end)
+        if entry then
+            self.pityCounter = 0
+            return entry
+        end
+        ---池中全是已拥有，退回普通抽
+    end
+
+    return self:WeightedRoll(function(_) return true end)
+end
+
+---在 pool 中按权重随机选取一个满足 predicate 的条目
+---@param predicate function
+---@return table?
+function GachaManager:WeightedRoll(predicate)
+    local candidates = {}
+    local totalWeight = 0
+    for _, entry in ipairs(self.pool) do
+        if predicate(entry) then
+            table.insert(candidates, entry)
+            totalWeight = totalWeight + entry.weight
+        end
+    end
+
+    if #candidates == 0 then return nil end
+
+    local roll = math.random() * totalWeight
+    for _, entry in ipairs(candidates) do
+        roll = roll - entry.weight
+        if roll <= 0 then
+            return entry
+        end
+    end
+
+    ---浮点兜底，返回最后一个
+    return candidates[#candidates]
+end
+
+return GachaManager

@@ -1,0 +1,29 @@
+local Skill = require("Gameplay.Skills.Skill")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+local EffectTypes = require("Config.Generated.EffectTypes")
+local EffectFactory = require("Gameplay.Effects.EffectFactory")
+
+---@class ServantHeal : Skill
+---侍从·治愈：释放时给所有友方单位挂治疗 hot（10秒，每秒回施法者攻击力的 30%）
+local ServantHeal = Skill:extend()
+
+local HEAL_DURATION = 10
+local HEAL_RATIO = 0.3
+
+function ServantHeal:OnCast(source, target)
+    local attackAttr = source.attributes and source.attributes[AttributeType.Attack]
+    local attack = attackAttr and attackAttr:GetFinalValue() or 10
+    local dps = attack * HEAL_RATIO
+
+    local GameManager = require("GameManager")
+    local combatManager = GameManager.levelManager.combatManager
+    for _, ally in ipairs(combatManager:GetAllies()) do
+        local instance = EffectFactory.CreateInstance(EffectTypes.heal, ally, source, HEAL_DURATION, { dps = dps })
+        ally:AddEffect(instance)
+    end
+end
+
+function ServantHeal:OnHit(source, target, ctx)
+end
+
+return ServantHeal

@@ -1,0 +1,27 @@
+local EffectTypes = {
+
+    shield = 1,
+    [1] = "shield",
+    poison = 2,
+    [2] = "poison",
+    speed_up = 3,
+    [3] = "speed_up",
+    attack_up = 4,
+    [4] = "attack_up",
+    stun = 5,
+    [5] = "stun",
+    defense_up = 6,
+    [6] = "defense_up",
+    defense_down = 7,
+    [7] = "defense_down",
+    speed_down = 8,
+    [8] = "speed_down",
+    attack_down = 9,
+    [9] = "attack_down",
+    heal = 10,
+    [10] = "heal",
+    immortal_totem = 11,
+    [11] = "immortal_totem",
+}
+
+return EffectTypes

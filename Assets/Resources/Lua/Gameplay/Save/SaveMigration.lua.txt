@@ -1,0 +1,55 @@
+---@class SaveMigration 存档版本迁移器
+---每个迁移函数接收并修改整个存档数据表
+local SaveMigration = {}
+
+---@type table<integer, fun(data: table)>
+SaveMigration.MIGRATIONS = {
+    -- v1 是基线版本，不需要迁移
+    [2] = function(data)
+        -- 示例：从 v1 到 v2 引入世界/关卡系统
+        data.world = data.world or {
+            currentLevelId = "level_1",
+            unlockedLevels = { "level_1" },
+            checkpoints = {},
+            flags = {}
+        }
+    end,
+
+    [3] = function(data)
+        -- 示例：从 v2 到 v3 引入元数据模块
+        data.meta = data.meta or {
+            totalPlayTime = 0,
+            deathCount = 0
+        }
+    end
+}
+
+---将存档数据迁移到目标版本
+---@param data table
+---@param targetVersion integer
+---@return table data
+function SaveMigration.Migrate(data, targetVersion)
+    data = data or {}
+    targetVersion = targetVersion or 1
+
+    local startVersion = data.version or 1
+
+    if startVersion > targetVersion then
+        error(string.format(
+            "[SaveMigration] Save version %d is newer than game version %d",
+            startVersion, targetVersion
+        ))
+    end
+
+    for v = startVersion + 1, targetVersion do
+        local migration = SaveMigration.MIGRATIONS[v]
+        if migration then
+            migration(data)
+        end
+        data.version = v
+    end
+
+    return data
+end
+
+return SaveMigration

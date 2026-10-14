@@ -1,0 +1,34 @@
+local EffectDefinition = require("Gameplay.Effects.EffectDefinition")
+local EventSystem = require("Event.EventSystem")
+
+---@class ShieldEffectDefinition : EffectDefinition
+local ShieldEffectDefinition = EffectDefinition:extend()
+
+---@param target Entity
+---@param source Entity?
+---@param params table?
+---@param ctx DamageContext
+---@return boolean? 返回 true 表示护盾耗尽，实例应被移除
+function ShieldEffectDefinition:OnInterceptDamage(target, source, params, ctx)
+    if ctx.amount <= 0 then return false end
+    local amount = params.amount or 0
+    if amount <= 0 then return true end
+
+    local absorb = math.min(ctx.amount, amount)
+    params.amount = amount - absorb
+    ctx.amount = ctx.amount - absorb
+    ctx.absorbed = ctx.absorbed + absorb
+
+    if absorb > 0 then
+        EventSystem:FireEffectDamageAbsorbedEvent(target, self, absorb)
+    end
+
+    if ctx.amount <= 0 then
+        ctx.intercepted = true
+        ctx.amount = 0
+    end
+
+    return params.amount <= 0
+end
+
+return ShieldEffectDefinition

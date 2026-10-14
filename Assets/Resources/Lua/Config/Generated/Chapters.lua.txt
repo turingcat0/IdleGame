@@ -1,0 +1,44 @@
+local Chapters = {
+
+    ["chapter_1"] = {
+        name = "第1章:荒野",
+    },
+    ["chapter_2"] = {
+        name = "第2章:热带平原",
+        unlockCondition = "chapter_1",
+    },
+    ["chapter_3"] = {
+        name = "第3章:地牢",
+        unlockCondition = "chapter_2",
+    },
+    ["chapter_4"] = {
+        name = "第4章:草原",
+        unlockCondition = "chapter_3",
+    },
+    ["chapter_5"] = {
+        name = "第5章:金色平原",
+        unlockCondition = "chapter_4",
+    },
+    ["chapter_6"] = {
+        name = "第6章:深渊",
+        unlockCondition = "chapter_5",
+    },
+    ["chapter_7"] = {
+        name = "第7章:森林",
+        unlockCondition = "chapter_6",
+    },
+    ["chapter_8"] = {
+        name = "第8章:热带高原",
+        unlockCondition = "chapter_7",
+    },
+    ["chapter_9"] = {
+        name = "第9章:暗影巢穴",
+        unlockCondition = "chapter_8",
+    },
+    ["chapter_10"] = {
+        name = "第10章:繁花森林",
+        unlockCondition = "chapter_9",
+    },
+}
+
+return Chapters

@@ -1,0 +1,87 @@
+local Effects = require("Config.Generated.Effects")
+local EffectTypes = require("Config.Generated.EffectTypes")
+local EffectInstance = require("Gameplay.Effects.EffectInstance")
+local EffectDefinition = require("Gameplay.Effects.EffectDefinition")
+local ShieldEffectDefinition = require("Gameplay.Effects.ShieldEffectDefinition")
+local PoisonEffectDefinition = require("Gameplay.Effects.PoisonEffectDefinition")
+local StatModEffectDefinition = require("Gameplay.Effects.StatModEffectDefinition")
+local StunEffectDefinition = require("Gameplay.Effects.StunEffectDefinition")
+local TriggerStatModEffectDefinition = require("Gameplay.Effects.TriggerStatModEffectDefinition")
+local HealEffectDefinition = require("Gameplay.Effects.HealEffectDefinition")
+local ImmortalTotemEffectDefinition = require("Gameplay.Effects.ImmortalTotemEffectDefinition")
+
+---@class EffectFactory
+local EffectFactory = {}
+
+---@type table<string, EffectDefinition>
+local definitions = {}
+
+---@param id string
+---@param config table
+---@return EffectDefinition?
+local function CreateDefinition(id, config)
+    if config.type == "shield" then
+        return ShieldEffectDefinition(id, config)
+    elseif config.type == "poison" then
+        return PoisonEffectDefinition(id, config)
+    elseif config.type == "stat_mod" then
+        return StatModEffectDefinition(id, config)
+    elseif config.type == "stun" then
+        return StunEffectDefinition(id, config)
+    elseif config.type == "trigger_stat_mod" then
+        return TriggerStatModEffectDefinition(id, config)
+    elseif config.type == "heal" then
+        return HealEffectDefinition(id, config)
+    elseif config.type == "immortal_totem" then
+        return ImmortalTotemEffectDefinition(id, config)
+    end
+    print(string.format("[EffectFactory] unknown effect type '%s' for id '%s'", config.type, id))
+    return nil
+end
+
+---按配置初始化所有 EffectDefinition
+for id, config in pairs(Effects) do
+    local def = CreateDefinition(id, config)
+    if def then
+        definitions[id] = def
+    end
+end
+
+---把 EffectTypes 枚举值转成字符串 id
+---@param effectType integer
+---@return string?
+local function ResolveId(effectType)
+    return EffectTypes[effectType]
+end
+
+---使用枚举创建一个效果实例
+---@param effectType integer EffectTypes.xxx
+---@param target Entity
+---@param source Entity?
+---@param duration number
+---@param params table?
+---@return EffectInstance?
+function EffectFactory.CreateInstance(effectType, target, source, duration, params)
+    local id = ResolveId(effectType)
+    if not id then
+        print(string.format("[EffectFactory] unknown effect type enum '%s'", tostring(effectType)))
+        return nil
+    end
+
+    local definition = definitions[id]
+    if not definition then
+        print(string.format("[EffectFactory] no definition for effect id '%s'", id))
+        return nil
+    end
+
+    return EffectInstance(definition, target, source, duration, params)
+end
+
+---根据 id 直接获取 EffectDefinition
+---@param id string
+---@return EffectDefinition?
+function EffectFactory.GetDefinition(id)
+    return definitions[id]
+end
+
+return EffectFactory

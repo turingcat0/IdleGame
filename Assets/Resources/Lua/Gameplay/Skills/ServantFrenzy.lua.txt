@@ -1,0 +1,29 @@
+local Skill = require("Gameplay.Skills.Skill")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+local EffectTypes = require("Config.Generated.EffectTypes")
+local EffectFactory = require("Gameplay.Effects.EffectFactory")
+
+---@class ServantFrenzy : Skill
+---侍从·狂暴：释放时给所有友方单位加攻击（施法者攻击力的 40%，持续 10 秒）
+local ServantFrenzy = Skill:extend()
+
+local FRENZY_DURATION = 10
+local FRENZY_RATIO = 0.4
+
+function ServantFrenzy:OnCast(source, target)
+    local attackAttr = source.attributes and source.attributes[AttributeType.Attack]
+    local attack = attackAttr and attackAttr:GetFinalValue() or 10
+    local value = attack * FRENZY_RATIO
+
+    local GameManager = require("GameManager")
+    local combatManager = GameManager.levelManager.combatManager
+    for _, ally in ipairs(combatManager:GetAllies()) do
+        local instance = EffectFactory.CreateInstance(EffectTypes.attack_up, ally, source, FRENZY_DURATION, { value = value })
+        ally:AddEffect(instance)
+    end
+end
+
+function ServantFrenzy:OnHit(source, target, ctx)
+end
+
+return ServantFrenzy

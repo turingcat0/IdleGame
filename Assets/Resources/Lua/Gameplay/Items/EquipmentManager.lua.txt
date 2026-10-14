@@ -1,0 +1,93 @@
+local Object = require("Utils.classic")
+local EventSystem = require("Event.EventSystem")
+local EventType   = require("Event.EventType")
+local Modifier = require("Gameplay.Stats.Modifier")
+local ModifierType = require("Gameplay.Stats.ModifierType")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+
+---@class EquipmentManager
+---@field player Player
+local EquipmentManager = Object:extend()
+
+---
+---@param player Player
+function EquipmentManager:New(player)
+    self.player = player
+    EventSystem:RegisterEquipmentChangedListener(self.player, self, EquipmentManager.OnPlayerEquipmentChanged)
+end
+
+---在装备被卸下时， 取消其效果对玩家的属性的修改
+---@param equipmentEffect EquipmentEffect
+function EquipmentManager:HandleUnequip(equipmentEffect)
+    for _, attribute in pairs(self.player.attributes) do
+        attribute:RemoveModifier(equipmentEffect.source)
+    end
+    equipmentEffect:OnRemoved()
+end
+
+---在装备被穿上时
+---@param equipmentEffect EquipmentEffect
+function EquipmentManager:HandleEquip(equipmentEffect)
+    for attributeType, attribute in pairs(equipmentEffect.attributes) do
+        ---暂时先只支持flatadd， 我看那个游戏里暂时还没有能直接在人物属性上乘算的装备
+        local modifier = Modifier(ModifierType.FlatAdd, attribute:GetFinalValue())
+        self.player.attributes[attributeType]:AddModifier(equipmentEffect.source, modifier)
+    end
+    equipmentEffect:OnEffectAdded()
+end
+---@param slot EquipmentSlot
+---@param player Player
+---@param oldEquipment ItemInstance?
+---@param newEquipment ItemInstance?
+function EquipmentManager:OnPlayerEquipmentChanged(slot, player, oldEquipment, newEquipment)
+    if oldEquipment then
+        self:HandleUnequip(oldEquipment.equipmentEffect)
+        --然后我们就可以更方便的检查套装效果了
+        --移除旧的套装效果
+        ---@type EquipmentSet
+        local oldSet = oldEquipment.item.equipmentSet
+        local counter1 = 0
+        for _, itemInstance in pairs(self.player.inventory.slots) do
+            if itemInstance.item.equipmentSet == oldSet then
+                counter1 = counter1 + 1
+            end
+        end
+        if newEquipment == nil or oldEquipment.item.equipmentSet ~= newEquipment.item.equipmentSet then
+            if counter1 == 1 then
+                self:HandleUnequip(oldSet.twoPieceBonus)
+            elseif counter1 == 3 then
+                self:HandleUnequip(oldSet.fourPieceBonus)
+            elseif counter1 == 5 then
+                self:HandleUnequip(oldSet.sixPieceBonus)
+            end
+        end
+    end
+    if newEquipment then
+        self:HandleEquip(newEquipment.equipmentEffect)
+        if oldEquipment == nil or oldEquipment.item.equipmentSet ~= newEquipment.item.equipmentSet  then
+            --添加新的套装效果
+            ---@type EquipmentSet
+            local newSet = newEquipment.item.equipmentSet
+            local counter2 = 0
+            for _, itemInstance in pairs(self.player.inventory.slots) do
+                if itemInstance.item.equipmentSet == newSet then
+                    counter2 = counter2 + 1
+                end
+            end
+            if counter2 == 2 then
+                self:HandleEquip(newSet.twoPieceBonus)
+            elseif counter2 == 4 then
+                self:HandleEquip(newSet.fourPieceBonus)
+            elseif counter2 == 6 then
+                self:HandleEquip(newSet.sixPieceBonus)
+            end
+        end
+    end
+end
+
+---在需要释放资源时调用
+function EquipmentManager:Dispose()
+    EventSystem:RemoveEquipmentChangedListener(self.player, self, EquipmentManager.OnPlayerEquipmentChanged)
+end
+
+return EquipmentManager

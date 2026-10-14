@@ -1,0 +1,55 @@
+---引导锚点解析：把配置表里的锚点名字变成场景里的 Transform。
+---"引导怎么找到目标"这件事的知识全收在本文件，以后要改成面板主动注册也只动这里。
+
+---GameObject.Find 找不到时，从这些根节点往下深搜。
+---深搜能命中未激活节点，Find 不能——Boss 按钮、仆从卡这类叶子平时是 SetActive(false) 的。
+local searchRoots = { "UICanvas", "GachaUI", "ServantUI", "SkillUI", "DungeonUI", "CombatStatsUI" }
+
+local GuideAnchorRegistry = {}
+
+---在子树里按名字深搜，包含未激活节点
+---@param root CS.UnityEngine.Transform
+---@param name string
+---@return CS.UnityEngine.Transform|nil
+local function FindInChildren(root, name)
+    for i = 0, root.childCount - 1 do
+        local child = root:GetChild(i)
+        if child.name == name then
+            return child
+        end
+        local found = FindInChildren(child, name)
+        if found then
+            return found
+        end
+    end
+    return nil
+end
+
+---解析锚点名。故意不做缓存：解析只在每步开始时发生一次，
+---缓存反而会在对象被销毁/重建后留下失效引用。
+---@param anchorName string
+---@return CS.UnityEngine.Transform|nil
+function GuideAnchorRegistry.Resolve(anchorName)
+    if not anchorName then
+        return nil
+    end
+
+    local go = CS.UnityEngine.GameObject.Find(anchorName)
+    if go then
+        return go.transform
+    end
+
+    for _, rootName in ipairs(searchRoots) do
+        local rootGo = CS.UnityEngine.GameObject.Find(rootName)
+        if rootGo then
+            local found = FindInChildren(rootGo.transform, anchorName)
+            if found then
+                return found
+            end
+        end
+    end
+
+    return nil
+end
+
+return GuideAnchorRegistry

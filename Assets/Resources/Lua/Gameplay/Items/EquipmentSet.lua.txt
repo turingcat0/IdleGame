@@ -1,0 +1,25 @@
+local Object = require("Utils.classic")
+
+---@class EquipmentSet
+---@field id string
+---@field name string
+---@field twoPieceBonus EquipmentEffect
+---@field fourPieceBonus EquipmentEffect
+---@field sixPieceBonus EquipmentEffect
+local EquipmentSet = Object:extend()
+
+---
+---@param id string
+---@param name string
+---@param twoPieceBonus EquipmentEffect
+---@param fourPieceBonus EquipmentEffect
+---@param sixPieceBonus EquipmentEffect
+function EquipmentSet:New(id, name, twoPieceBonus, fourPieceBonus, sixPieceBonus)
+    self.id = id
+    self.name = name
+    self.twoPieceBonus = twoPieceBonus
+    self.fourPieceBonus = fourPieceBonus
+    self.sixPieceBonus = sixPieceBonus
+end
+
+return EquipmentSet

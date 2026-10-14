@@ -1,0 +1,57 @@
+local GameManager = require("GameManager")
+local EventSystem = require("Event.EventSystem")
+
+---@type CS.UnityEngine.MonoBehaviour
+local self = self
+
+local coinText = nil
+local crystalText = nil
+local player = nil
+
+function Awake()
+    local coinTf = self.transform:Find("Panel/Coin/Background/Count")
+    if coinTf then
+        coinText = coinTf:GetComponent(typeof(CS.TMPro.TextMeshProUGUI))
+    end
+
+    local crystalTf = self.transform:Find("Panel/Crystal/Background/Count")
+    if crystalTf then
+        crystalText = crystalTf:GetComponent(typeof(CS.TMPro.TextMeshProUGUI))
+    end
+end
+
+function Start()
+    player = GameManager.player
+    EventSystem:RegisterCoinsChangedListener(player, nil, OnCoinChanged)
+    EventSystem:RegisterCrystalChangedListener(player, nil, OnCrystalChanged)
+    Refresh()
+end
+
+function Refresh()
+    if not player then return end
+    if coinText then
+        coinText.text = tostring(player.inventory.coins)
+    end
+    if crystalText then
+        crystalText.text = tostring(player.inventory.crystals)
+    end
+end
+
+function OnCoinChanged(oldValue, newValue)
+    if coinText then
+        coinText.text = tostring(newValue)
+    end
+end
+
+function OnCrystalChanged(oldValue, newValue)
+    if crystalText then
+        crystalText.text = tostring(newValue)
+    end
+end
+
+function OnDestroy()
+    if player then
+        EventSystem:RemoveCoinsChangedListener(player, nil, OnCoinChanged)
+        EventSystem:RemoveCrystalChangedListener(player, nil, OnCrystalChanged)
+    end
+end

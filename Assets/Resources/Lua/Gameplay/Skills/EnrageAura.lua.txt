@@ -1,0 +1,21 @@
+local Skill = require("Gameplay.Skills.Skill")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+local EffectTypes = require("Config.Generated.EffectTypes")
+local EffectFactory = require("Gameplay.Effects.EffectFactory")
+
+---@class EnrageAura : Skill
+---狂暴化：释放时给自己加攻击（50%攻击力，10秒）
+local EnrageAura = Skill:extend()
+
+function EnrageAura:OnCast(source, target)
+    local attackAttr = source.attributes and source.attributes[AttributeType.Attack]
+    local attack = attackAttr and attackAttr:GetFinalValue() or 10
+    local value = attack * 0.5
+    local instance = EffectFactory.CreateInstance(EffectTypes.attack_up, source, source, 10, { value = value })
+    source:AddEffect(instance)
+end
+
+function EnrageAura:OnHit(source, target, ctx)
+end
+
+return EnrageAura

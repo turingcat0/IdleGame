@@ -1,0 +1,110 @@
+local Object         = require("Utils.classic")
+local StageConfigs   = require("Config.Generated.Stages")
+
+---每日扫荡次数上限（所有副本共享同一个次数池）
+local MaxDailySweep = 3
+
+---@class DungeonProgress 副本进度数据：通关记录 + 每日扫荡次数
+---@field player Player 玩家引用（用于读 progression.level 判解锁）
+---@field cleared table<string, boolean> 首通记录
+---@field clearCount table<string, integer> 通关次数（实打 boss 计一次）
+---@field dailySweepCount integer 今日已扫荡次数
+---@field sweepDate string 上次扫荡的日期（YYYY-MM-DD），用于跨日重置
+local DungeonProgress = Object:extend()
+
+---@param player Player
+function DungeonProgress:New(player)
+    self.player = player
+    self.cleared = {}
+    self.clearCount = {}
+    self.dailySweepCount = 0
+    self.sweepDate = ""
+end
+
+---跨日重置：sweepDate 不是今天则清零次数
+function DungeonProgress:CheckDailyReset()
+    local today = os.date("%Y-%m-%d")
+    if self.sweepDate ~= today then
+        self.sweepDate = today
+        self.dailySweepCount = 0
+    end
+end
+
+---副本是否已解锁（按玩家等级，配置列 unlockLevel）
+---@param stageId string
+---@return boolean unlocked, integer requiredLevel
+function DungeonProgress:IsUnlocked(stageId)
+    local sc = StageConfigs[stageId]
+    local required = (sc and sc.unlockLevel) or 0
+    return self.player.progression.level >= required, required
+end
+
+---副本是否已首通
+---@param stageId string
+---@return boolean
+function DungeonProgress:IsCleared(stageId)
+    return self.cleared[stageId] == true
+end
+
+---能否扫荡：已解锁 + 已首通 + 当日次数未满
+---@param stageId string
+---@return boolean
+function DungeonProgress:CanSweep(stageId)
+    if not self:IsUnlocked(stageId) then return false end
+    if not self:IsCleared(stageId) then return false end
+    self:CheckDailyReset()
+    return self.dailySweepCount < MaxDailySweep
+end
+
+---标记首通 + 累加通关次数（仅实打 boss 触发；扫荡不复用首通奖励，不计次数）
+---@param stageId string
+function DungeonProgress:MarkCleared(stageId)
+    self.cleared[stageId] = true
+    self.clearCount[stageId] = (self.clearCount[stageId] or 0) + 1
+end
+
+---消耗一次扫荡次数（调用前应已 CanSweep 通过）
+function DungeonProgress:ConsumeSweep()
+    self:CheckDailyReset()
+    self.dailySweepCount = self.dailySweepCount + 1
+end
+
+---剩余扫荡次数
+---@return integer
+function DungeonProgress:GetRemainingSweeps()
+    self:CheckDailyReset()
+    return math.max(0, MaxDailySweep - self.dailySweepCount)
+end
+
+---@return integer
+function DungeonProgress:GetMaxDailySweep()
+    return MaxDailySweep
+end
+
+---存档收集
+---@return table
+function DungeonProgress:Collect()
+    self:CheckDailyReset()
+    return {
+        cleared = self.cleared,
+        clearCount = self.clearCount,
+        dailySweepCount = self.dailySweepCount,
+        sweepDate = self.sweepDate,
+    }
+end
+
+---存档应用
+---@param data table
+function DungeonProgress:Apply(data)
+    self.cleared = data.cleared or {}
+    self.clearCount = data.clearCount or {}
+    self.dailySweepCount = tonumber(data.dailySweepCount) or 0
+    self.sweepDate = data.sweepDate or ""
+end
+
+---Editor 测试用：重置当日扫荡次数
+function DungeonProgress:ResetDailySweepCount()
+    self.dailySweepCount = 0
+end
+
+return DungeonProgress

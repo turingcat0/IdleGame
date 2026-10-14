@@ -1,0 +1,5 @@
+---@type Player Description
+local player = require("GameManager").player
+function Update()
+    player.progression:AddExp(1)
+end

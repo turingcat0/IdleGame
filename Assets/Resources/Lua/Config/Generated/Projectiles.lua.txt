@@ -1,0 +1,37 @@
+local Projectiles = {
+
+    ["default"] = {
+        name = "默认弹",
+        speed = 3,
+    },
+    ["fireball"] = {
+        name = "火球",
+        speed = 3,
+    },
+    ["slash_ball"] = {
+        name = "碎甲球",
+        speed = 3,
+    },
+    ["poison_ball"] = {
+        name = "毒液球",
+        speed = 3,
+    },
+    ["boss_breath"] = {
+        name = "巨龙吐息",
+        speed = 3,
+    },
+    ["boss_abyss_arrow"] = {
+        name = "深渊箭",
+        speed = 3,
+    },
+    ["boss_bolt_arrow"] = {
+        name = "暗影箭",
+        speed = 3,
+    },
+    ["boss_flare"] = {
+        name = "烈焰吐息",
+        speed = 3,
+    },
+}
+
+return Projectiles

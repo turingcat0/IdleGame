@@ -1,0 +1,144 @@
+local Object = require("Utils.classic")
+local EventSystem = require("Event.EventSystem")
+local EventType = require("Event.EventType")
+local Servants = require("Gameplay.Entities.Servants.Servants")
+
+local MAIN_SLOT_COUNT = 3
+local SUB_SLOT_COUNT = 5
+
+---@class ServantLoadout 玩家持有的随从与上阵配置（跨关卡的档案数据，不含战斗状态）
+---@field unlocked table<string, boolean>
+---@field mainSlots table<integer, string> 主随从位 → 随从 id，会上场战斗
+---@field subSlots table<integer, string> 副随从位 → 随从 id，只提供打折光环
+---@field levels table<string, integer> 随从 id → 当前等级
+local ServantLoadout = Object:extend()
+
+function ServantLoadout:New()
+    self.unlocked = {}
+    self.mainSlots = {}
+    self.subSlots = {}
+    self.levels = {}
+
+    --- 初始只送一个随从（护卫），其余通过抽奖获取
+    self.unlocked["guard"] = true
+    self.levels["guard"] = 1
+end
+
+---@return integer
+function ServantLoadout:MainSlotCount()
+    return MAIN_SLOT_COUNT
+end
+
+---@return integer
+function ServantLoadout:SubSlotCount()
+    return SUB_SLOT_COUNT
+end
+
+---@param id string
+---@return boolean
+function ServantLoadout:IsUnlocked(id)
+    return self.unlocked[id] == true
+end
+
+---@param id string
+function ServantLoadout:Unlock(id)
+    if self.unlocked[id] then return end
+    self.unlocked[id] = true
+    self.levels[id] = self.levels[id] or 1
+    EventSystem:FireEvent(EventType.ServantLoadoutChanged, self)
+end
+
+---持有的随从原型列表，UI 左侧列表用
+---@return Servant[]
+function ServantLoadout:GetOwned()
+    local owned = {}
+    for _, servant in ipairs(Servants.servants) do
+        if self:IsUnlocked(servant.id) then
+            table.insert(owned, servant)
+        end
+    end
+    return owned
+end
+
+---@param kind string "main" 或 "sub"
+---@return table<integer, string>
+function ServantLoadout:SlotsOf(kind)
+    return kind == "main" and self.mainSlots or self.subSlots
+end
+
+---@param kind string
+---@param index integer
+---@return Servant?
+function ServantLoadout:Get(kind, index)
+    local id = self:SlotsOf(kind)[index]
+    return id and Servants[id] or nil
+end
+
+---查一个随从当前占着哪个槽位
+---@param id string
+---@return string? kind
+---@return integer? index
+function ServantLoadout:FindSlot(id)
+    for index = 1, MAIN_SLOT_COUNT do
+        if self.mainSlots[index] == id then return "main", index end
+    end
+    for index = 1, SUB_SLOT_COUNT do
+        if self.subSlots[index] == id then return "sub", index end
+    end
+    return nil, nil
+end
+
+---把随从放进槽位。同一个随从只能占一个槽位，所以会先从原槽位撤出
+---@param kind string
+---@param index integer
+---@param id string?
+function ServantLoadout:Equip(kind, index, id)
+    if not id then
+        self:Unequip(kind, index)
+        return
+    end
+    if not self:IsUnlocked(id) then return end
+
+    local oldKind, oldIndex = self:FindSlot(id)
+    if oldKind == kind and oldIndex == index then return end
+    if oldKind then
+        self:SlotsOf(oldKind)[oldIndex] = nil
+    end
+
+    self:SlotsOf(kind)[index] = id
+    EventSystem:FireEvent(EventType.ServantLoadoutChanged, self)
+end
+
+---@param kind string
+---@param index integer
+function ServantLoadout:Unequip(kind, index)
+    local slots = self:SlotsOf(kind)
+    if not slots[index] then return end
+    slots[index] = nil
+    EventSystem:FireEvent(EventType.ServantLoadoutChanged, self)
+end
+
+---@param id string
+---@return integer
+function ServantLoadout:GetLevel(id)
+    return self.levels[id] or 1
+end
+
+---@param id string
+---@param level integer
+function ServantLoadout:SetLevel(id, level)
+    local servant = Servants[id]
+    if not servant then return end
+    self.levels[id] = math.min(math.max(level, 1), servant.maxLevel)
+    EventSystem:FireEvent(EventType.ServantLoadoutChanged, self)
+end
+
+---@param id string
+---@return integer 升级所需金币
+function ServantLoadout:UpgradeCost(id)
+    local servant = Servants[id]
+    if not servant then return 0 end
+    return servant.upgradeBaseCost * self:GetLevel(id)
+end
+
+return ServantLoadout

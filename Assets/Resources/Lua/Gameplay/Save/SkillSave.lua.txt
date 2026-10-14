@@ -1,0 +1,89 @@
+local Skills = require("Gameplay.Skills.Skills")
+
+---@class SkillSave 技能配置与冷却存档模块
+local SkillSave = {}
+
+---收集技能状态
+---@param context table
+---@return table
+function SkillSave.Collect(context)
+    local player = context.player
+    local tracker = player.skillCooldownTracker
+
+    local signatureIds = {}
+    for _, skill in ipairs(player.signatureSkills or {}) do
+        table.insert(signatureIds, skill.id)
+    end
+
+    local cooldowns = {}
+    for skillId, remain in pairs(tracker.remain) do
+        if remain > 0 then
+            cooldowns[skillId] = remain
+        end
+    end
+
+    return {
+        normal = player.normalSkill and player.normalSkill.id or nil,
+        combat = player.combatSkill and player.combatSkill.id or nil,
+        signature = signatureIds,
+        cooldowns = cooldowns,
+    }
+end
+
+---将存档数据应用到技能
+---@param context table
+---@param data table
+function SkillSave.Apply(context, data)
+    local player = context.player
+    local tracker = player.skillCooldownTracker
+
+    local normalSkill = data.normal and Skills[data.normal] or nil
+    local combatSkill = data.combat and Skills[data.combat] or nil
+
+    -- 校验解锁状态：未解锁的技能不恢复，回落到 Player:New 里设的默认值
+    if normalSkill and not player:IsSkillUnlocked(normalSkill.id) then
+        normalSkill = nil
+    end
+    if combatSkill and not player:IsSkillUnlocked(combatSkill.id) then
+        combatSkill = nil
+    end
+    if not normalSkill then normalSkill = player.normalSkill end
+    if not combatSkill then combatSkill = player.combatSkill end
+
+    local signatureSkills = {}
+    local maxSlots = player:GetSignatureSlotCount()
+    for _, id in ipairs(data.signature or {}) do
+        local skill = Skills[id]
+        if skill and player:IsSkillUnlocked(id) and #signatureSkills < maxSlots then
+            table.insert(signatureSkills, skill)
+        end
+    end
+    -- 存档里的签名技都不可用就保留默认
+    if #signatureSkills == 0 then
+        signatureSkills = player.signatureSkills
+    end
+
+    player:SetSkills(normalSkill, combatSkill, signatureSkills)
+
+    for skillId, remain in pairs(data.cooldowns or {}) do
+        local skill = Skills[skillId]
+        if skill then
+            tracker:StartCooldown(skill)
+            -- 兼容旧档或脏数据：把字符串/其他类型转成 number
+            tracker.remain[skillId] = tonumber(remain) or 0
+        end
+    end
+end
+
+---默认技能数据
+---@return table
+function SkillSave.Default()
+    return {
+        normal = nil,
+        combat = nil,
+        signature = {},
+        cooldowns = {},
+    }
+end
+
+return SkillSave

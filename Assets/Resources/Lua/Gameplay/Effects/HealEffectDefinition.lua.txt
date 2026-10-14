@@ -1,0 +1,20 @@
+local EffectDefinition = require("Gameplay.Effects.EffectDefinition")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+
+---@class HealEffectDefinition : EffectDefinition
+local HealEffectDefinition = EffectDefinition:extend()
+
+---@param target Entity
+---@param source Entity?
+---@param params table?
+---@param deltaTime number
+function HealEffectDefinition:OnUpdate(target, source, params, deltaTime)
+    local dps = params.dps or 0
+    local heal = dps * deltaTime
+    if heal > 0 then
+        local maxHealth = target.attributes[AttributeType.MaxHealth]:GetFinalValue()
+        target:SetHealth(math.min(maxHealth, target.health + heal))
+    end
+end
+
+return HealEffectDefinition

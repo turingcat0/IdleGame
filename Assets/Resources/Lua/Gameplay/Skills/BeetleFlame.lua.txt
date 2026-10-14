@@ -1,0 +1,21 @@
+local Skill = require("Gameplay.Skills.Skill")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+local EffectTypes = require("Config.Generated.EffectTypes")
+local EffectFactory = require("Gameplay.Effects.EffectFactory")
+
+---@class BeetleFlame : Skill
+---烈焰吐息：释放时给自己加攻击（50%攻击力，10秒）
+local BeetleFlame = Skill:extend()
+
+function BeetleFlame:OnCast(source, target)
+    local attackAttr = source.attributes and source.attributes[AttributeType.Attack]
+    local attack = attackAttr and attackAttr:GetFinalValue() or 10
+    local value = attack * 0.5
+    local instance = EffectFactory.CreateInstance(EffectTypes.attack_up, source, source, 10, { value = value })
+    source:AddEffect(instance)
+end
+
+function BeetleFlame:OnHit(source, target, ctx)
+end
+
+return BeetleFlame

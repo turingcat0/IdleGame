@@ -1,0 +1,162 @@
+local Object = require("Utils.classic")
+local EventSystem = require("Event.EventSystem")
+
+---@class EffectManager 单个实体的效果管理器
+---@field owner Entity
+---@field effects EffectInstance[]
+---@field exclusiveSubstateOwnerId string? 当前控制 exclusiveSubstate 的效果 id
+local EffectManager = Object:extend()
+
+---@param owner Entity
+function EffectManager:New(owner)
+    self.owner = owner
+    self.effects = {}
+    self.exclusiveSubstateOwnerId = nil
+end
+
+---添加一个效果。同 id 的效果会合并到已有实例上：
+---可叠层则加层并刷新持续时间；不可叠层则只刷新持续时间。
+---@param instance EffectInstance
+---@return EffectInstance
+function EffectManager:AddEffect(instance)
+    local existing = self:GetEffect(instance.definition.id)
+    if existing then
+        if existing.definition.stackable then
+            local oldStacks = existing.stacks
+            existing:AddStack()
+            if existing.stacks ~= oldStacks then
+                EventSystem:FireEffectStackChangedEvent(self.owner, existing, oldStacks, existing.stacks)
+            end
+        else
+            existing:Refresh()
+        end
+        return existing
+    end
+
+    table.insert(self.effects, instance)
+
+    if instance.definition.substate and instance.definition.substate > 0 then
+        self.owner.exclusiveSubstate = instance.definition.substate
+        self.exclusiveSubstateOwnerId = instance.definition.id
+    end
+
+    instance:OnApply()
+    EventSystem:FireEffectAddedEvent(self.owner, instance)
+    return instance
+end
+
+---标记一个效果为待移除（实际移除发生在下一帧 OnUpdate）
+---@param instance EffectInstance
+function EffectManager:RemoveEffect(instance)
+    instance.expired = true
+end
+
+---按 id 查找效果
+---@param id string
+---@return EffectInstance?
+function EffectManager:GetEffect(id)
+    for _, instance in ipairs(self.effects) do
+        if instance.definition.id == id then
+            return instance
+        end
+    end
+    return nil
+end
+
+---每帧更新所有效果
+---@param deltaTime number
+function EffectManager:OnUpdate(deltaTime)
+    for i = #self.effects, 1, -1 do
+        local instance = self.effects[i]
+        -- 效果 tick 可能间接清空整个列表（中毒致死会触发死亡清理），后面的索引就失效了
+        if instance then
+            if instance.duration > 0 then
+                instance.remaining = instance.remaining - deltaTime
+                if instance.remaining <= 0 then
+                    instance.expired = true
+                end
+            end
+
+            for s = 1, instance.stacks do
+                instance:OnUpdate(deltaTime)
+            end
+
+            if instance.expired and self.effects[i] == instance then
+                self:RemoveEffectAt(i)
+            end
+        end
+    end
+end
+
+---立即清空所有效果，走正常的移除流程（注销监听、撤属性修改、复位 substate、发事件）
+---死亡清理用：不能只标记 expired，因为死亡实体当帧就不再 tick 了
+function EffectManager:ClearAll()
+    for i = #self.effects, 1, -1 do
+        self:RemoveEffectAt(i)
+    end
+end
+
+---内部：立即移除指定索引的效果并触发事件
+---@param index number
+function EffectManager:RemoveEffectAt(index)
+    local instance = self.effects[index]
+    table.remove(self.effects, index)
+    instance:OnExpire()
+
+    if self.exclusiveSubstateOwnerId == instance.definition.id then
+        self.exclusiveSubstateOwnerId = nil
+        self.owner.exclusiveSubstate = 0
+    end
+
+    EventSystem:FireEffectRemovedEvent(self.owner, instance)
+end
+
+---伤害 pipeline：Modify 阶段
+---@param ctx DamageContext
+function EffectManager:ProcessModify(ctx)
+    for _, instance in ipairs(self.effects) do
+        instance:OnModifyDamage(ctx)
+    end
+end
+
+---伤害 pipeline：Mitigate 阶段
+---@param ctx DamageContext
+function EffectManager:ProcessMitigate(ctx)
+    for _, instance in ipairs(self.effects) do
+        instance:OnMitigateDamage(ctx)
+    end
+end
+
+---伤害 pipeline：Intercept 阶段
+---@param ctx DamageContext
+function EffectManager:ProcessIntercept(ctx)
+    local immortalTotem = nil
+    for _, instance in ipairs(self.effects) do
+        if instance.definition.id == "immortal_totem" then
+            immortalTotem = instance
+        elseif not ctx.intercepted then
+            local shouldExpire = instance:OnInterceptDamage(ctx)
+            if shouldExpire then
+                instance.expired = true
+            end
+        end
+    end
+
+    -- 不死图腾最后处理：让护盾等常规拦截优先吸收伤害
+    if immortalTotem and not immortalTotem.expired and not ctx.intercepted then
+        local shouldExpire = immortalTotem:OnInterceptDamage(ctx)
+        if shouldExpire then
+            immortalTotem.expired = true
+        end
+    end
+end
+
+---伤害 pipeline：Post 阶段
+---@param ctx DamageContext
+function EffectManager:ProcessPost(ctx)
+    for _, instance in ipairs(self.effects) do
+        instance:OnPostDamage(ctx)
+    end
+end
+
+return EffectManager

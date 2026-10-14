@@ -1,0 +1,267 @@
+local Progression        = require("Gameplay.Stats.Progression")
+local PlayerInventory = require("Gameplay.Items.PlayerInventory")
+local AttributeTypes  = require("Gameplay.Stats.AttributeType")
+local Attribute       = require("Gameplay.Stats.Attribute")
+local Entity          = require("Gameplay.Entities.Entity")
+local LevelProgression = require("Config.progression")
+local EventSystem = require("Event.EventSystem")
+local EquipmentManager = require("Gameplay.Items.EquipmentManager")
+local EventType        = require("Event.EventType")
+local AttributeType    = require("Gameplay.Stats.AttributeType")
+local Skills           = require("Gameplay.Skills.Skills")
+local SkillUnlockManager = require("Gameplay.Skills.SkillUnlockManager")
+local PowerCalculator  = require("Gameplay.Stats.PowerCalculator")
+local ServantLoadout   = require("Gameplay.Entities.Servants.ServantLoadout")
+local EntityState      = require("Gameplay.Entities.EntityState")
+
+---属性类型 → progression 配置里的字段名。
+---InitAttributes 与 OnLevelChanged 共用这一份，加新属性时不会只改了一处
+local LEVEL_ATTRIBUTE_FIELDS = {
+    [AttributeTypes.MaxHealth]  = "maxHealth",
+    [AttributeTypes.MaxMana]    = "maxMana",
+    [AttributeTypes.Defense]    = "defense",
+    [AttributeTypes.Attack]     = "attack",
+    [AttributeTypes.Speed]      = "speed",
+    [AttributeTypes.CritChance] = "critChance",
+    [AttributeTypes.CritDamage] = "critDamage",
+    [AttributeTypes.Lifesteal]  = "lifesteal",
+}
+
+---@class Player : Entity
+---@field attributes table<AttributeType, Attribute>
+---@field progression Progression
+---@field health number
+---@field mana number
+---@field inventory PlayerInventory
+---@field effectManager EffectManager
+---@field equipmentManager EquipmentManager
+---@field activeSkill Skill? 正在使用的技能
+---@field idle boolean 是否还没入场（未点击唤醒 / 过场冻结中）
+---@field skillUnlockManager SkillUnlockManager 技能解锁管理器
+local Player = Entity:extend()
+
+
+---@param positionX number 初始位置的x坐标
+---@param groundY number 地面Y坐标
+function Player:New(positionX, groundY)
+    Player.super.New(self)
+
+    self.progression = Progression(1, 0)
+    self:InitAttributes()
+    self:InitHealth()
+    self.mana = self.attributes[AttributeTypes.MaxMana]:GetFinalValue()
+    self.inventory = PlayerInventory(self)
+    self.equipmentManager = EquipmentManager(self)
+    self.servantLoadout = ServantLoadout()
+    self.idle = true
+    self.position = positionX
+    self.groundY = groundY
+
+    -- SkillUnlockManager 必须在 SetSkills 之前创建：
+    -- 读档时 PlayerSave.Apply 会 SetLevel 触发 LevelChanged，
+    -- SkillUnlockManager 收到后 Recompute，之后的 SkillSave.Apply 才能正确校验解锁状态
+    self.skillUnlockManager = SkillUnlockManager(self)
+
+    -- 技能配置（可被外部 SetSkills 覆盖）
+    self:SetSkills(Skills["player_default"], Skills["player_ranged"], { Skills["player_signature"] })
+
+    EventSystem:RegisterLevelChangedListener(self, self, Player.OnLevelChanged)
+    EventSystem:RegisterAttributeChangedListener(self, AttributeType.MaxHealth, self, Player.OnMaxHealthChanged)
+    EventSystem:RegisterAttributeChangedListener(self, AttributeType.MaxMana, self, Player.OnMaxManaChanged)
+    table.insert(self.tags, "player")
+end
+
+function Player:InitAttributes()
+    local levelConfig = LevelProgression[self.progression.level]
+    if not levelConfig then
+        print(string.format("[Player] InitAttributes: level %d not found in LevelProgression, falling back to level 1", self.progression.level))
+        levelConfig = LevelProgression[1]
+    end
+    for attributeType, field in pairs(LEVEL_ATTRIBUTE_FIELDS) do
+        self.attributes[attributeType] = Attribute(levelConfig[field])
+    end
+end
+
+function Player:OnLevelChanged(oldLevel, newLevel)
+    local levelConfig = LevelProgression[newLevel]
+    if not levelConfig then
+        print(string.format("[Player] OnLevelChanged: level %d not found in LevelProgression, skipping attribute update", newLevel))
+        return
+    end
+
+    --- SetBaseValue 会 fire AttributeChangedEvent，由 OnMaxHealthChanged / OnMaxManaChanged 统一按比例调血调蓝
+    for attributeType, field in pairs(LEVEL_ATTRIBUTE_FIELDS) do
+        self.attributes[attributeType]:SetBaseValue(levelConfig[field])
+    end
+end
+
+---MaxHealth 变动时按比例调整当前血量（升级 / 装备 / 随从光环等统一走这里）
+function Player:OnMaxHealthChanged()
+    local attr = self.attributes[AttributeType.MaxHealth]
+    local oldMax = attr.cache
+    local newMax = attr:GetFinalValue()
+    if self.health > 0 and oldMax and oldMax ~= newMax then
+        self:SetHealth(math.max(1, math.min(self.health / oldMax * newMax, newMax)))
+    end
+end
+
+---MaxMana 变动时按比例调整当前蓝量
+function Player:OnMaxManaChanged()
+    local attr = self.attributes[AttributeType.MaxMana]
+    local oldMax = attr.cache
+    local newMax = attr:GetFinalValue()
+    if self.mana > 0 and oldMax and oldMax ~= newMax then
+        self:SetMana(math.max(0, math.min(self.mana / oldMax * newMax, newMax)))
+    end
+end
+
+
+---击杀敌人的经验进玩家的成长档案。Heal / mana 相关已上移到 Entity
+---@param exp number
+function Player:AddExp(exp)
+    self.progression:AddExp(exp)
+end
+
+---外部配置玩家技能
+---@param normalSkill Skill   普通技能（mana 不足时的 fallback）
+---@param combatSkill Skill   默认战斗技能意图
+---@param signatureSkills Skill[] 掌控技列表
+function Player:SetSkills(normalSkill, combatSkill, signatureSkills)
+    self.normalSkill = normalSkill
+    self.combatSkill = combatSkill
+    self.signatureSkills = signatureSkills or {}
+    self.skillIntent = combatSkill
+end
+
+---获取已解锁的指定类型技能列表
+---@param skillType SkillType
+---@return Skill[]
+function Player:GetUnlockedSkills(skillType)
+    return self.skillUnlockManager:GetUnlockedByType(skillType)
+end
+
+---判断技能是否已解锁
+---@param skillId string
+---@return boolean
+function Player:IsSkillUnlocked(skillId)
+    return self.skillUnlockManager:IsUnlocked(skillId)
+end
+
+---获取当前 Signature 槽位数量
+---@return integer
+function Player:GetSignatureSlotCount()
+    return self.skillUnlockManager:GetSignatureSlotCount()
+end
+
+---装备技能到指定槽位（供 UI 调用）
+---@param slotType string "normal" | "combat" | "signature"
+---@param index integer signature 用，从 1 开始；normal/combat 传 1
+---@param skill Skill? nil 表示卸下
+---@return boolean
+function Player:EquipSkill(slotType, index, skill)
+    if skill and not self:IsSkillUnlocked(skill.id) then
+        print(string.format("[Player] Cannot equip locked skill '%s'", skill.id))
+        return false
+    end
+    if slotType == "normal" then
+        self.normalSkill = skill
+    elseif slotType == "combat" then
+        self.combatSkill = skill
+        self.skillIntent = skill
+    elseif slotType == "signature" then
+        if skill then
+            self.signatureSkills[index] = skill
+        else
+            table.remove(self.signatureSkills, index)
+        end
+        -- 截断超出槽位数量的部分
+        local maxSlots = self:GetSignatureSlotCount()
+        while #self.signatureSkills > maxSlots do
+            table.remove(self.signatureSkills)
+        end
+    end
+    -- 清除技能锁定，让 SkillSelector 重新选
+    self.nextSkill = nil
+    return true
+end
+
+function Player:OnUpdate()
+    Player.super.OnUpdate(self)
+
+    if self:IsDead() then return end
+
+    -- 晕眩时不能释放技能、不能主动移动（击退仍由基类处理）
+    if not self.stunned then
+        -- 移动控制：按 SkillSelector 选出的下一个可释放技能决定
+        local nextSkill = self:GetNextSkillToCast()
+        if self:IsKnockback() then
+            self.moveSpeed = 0
+        elseif self.activeSkill or (nextSkill and self:CanCastSkill(nextSkill)) then
+            self.moveSpeed = 0
+        elseif not self.idle then
+            self.moveSpeed = self.attributes[AttributeType.Speed]:GetFinalValue()
+        else
+            --- idle 分支必须显式归零：漏了这个 else 会保留上一帧速度，过场冻结时人还在走
+            self.moveSpeed = 0
+        end
+    else
+        self.moveSpeed = 0
+    end
+
+    if self.stunned then
+        self.state = EntityState.ExlusiveEffect
+    elseif self.activeSkill then
+        self.state = EntityState.Attacking
+    elseif self.moveSpeed > 0 then
+        self.state = EntityState.Walking
+    else
+        self.state = EntityState.Idling
+    end
+
+    self:Move()
+end
+
+---玩家点击唤醒：入场并开始走。nextSkill 交给 GetNextSkillToCast 惰性选，这里不必手工种
+function Player:WakeUp()
+    self.idle = false
+    self.moveSpeed = self.attributes[AttributeType.Speed]:GetFinalValue()
+end
+
+function Player:TryCast()
+    if self.idle then return false end
+    if not self:CanCast() then return false end
+    return Player.super.TryCast(self)
+end
+
+function Player:Respawn(spawnX, spawnY)
+    --- dead 先落回，之后的 SetHealth / SetMana 才是发生在活人身上的变化，事件监听看到的状态是自洽的
+    self.dead = false
+    self.state = EntityState.Idling
+    --- 上一条命残留的中毒/护盾/属性 buff 不该跟着复活
+    self.effectManager:ClearAll()
+    self.position = spawnX or self.position
+    if spawnY then self.groundY = spawnY end
+    --- 死亡瞬间的残余击退不清掉会在复活后继续把人拖离重生点
+    self.knockbackSpeed = 0
+    self.knockbackDistanceLeft = 0
+    self:SetHealth(self.attributes[AttributeType.MaxHealth]:GetFinalValue())
+    self:SetMana(self.attributes[AttributeType.MaxMana]:GetFinalValue())
+    self.skillIntent = self.combatSkill
+    --- 新的一条命给满配开局：死亡期间被冻住的冷却残值不带过来
+    --- 施法状态（activeSkill / skillDurationLeft / nextSkill）已由死亡清理 OnDied 归零
+    self.skillCooldownTracker:Clear()
+    self.idle = true
+    self.moveSpeed = 0
+end
+
+function Player:CanAttack()
+    if self.idle then return false end
+    local skillToCheck = self:GetNextSkillToCast()
+    return skillToCheck ~= nil and self:CanCastSkill(skillToCheck)
+end
+
+function Player:GetPower()
+    return PowerCalculator.Calculate(self.attributes)
+end
+
+return Player

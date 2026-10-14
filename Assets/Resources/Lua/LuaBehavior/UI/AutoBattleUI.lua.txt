@@ -1,0 +1,42 @@
+local GameManager = require("GameManager")
+---@type CS.UnityEngine.MonoBehaviour
+local self = self
+
+---@type CS.UnityEngine.UI.Button
+local button = nil
+
+---@type CS.UnityEngine.RectTransform
+local imageTransform = nil
+
+local currentState = nil
+local rotationSpeed = -180 -- 顺时针转速（度/秒）
+
+function Start()
+    button = self:GetComponent(typeof(CS.UnityEngine.UI.Button))
+    button.onClick:AddListener(OnButtonClicked)
+
+    local imageGo = self.transform:Find("Image")
+    if imageGo then
+        imageTransform = imageGo:GetComponent(typeof(CS.UnityEngine.RectTransform))
+    end
+end
+
+function OnDestroy()
+    button.onClick:RemoveListener(OnButtonClicked)
+end
+
+function Update()
+    local enabled = GameManager.playerController:IsAutoBattleEnabled()
+    if enabled ~= currentState then
+        currentState = enabled
+    end
+
+    if currentState and imageTransform then
+        imageTransform:Rotate(CS.UnityEngine.Vector3.forward * -rotationSpeed * CS.UnityEngine.Time.deltaTime)
+    end
+end
+
+function OnButtonClicked()
+    local pc = GameManager.playerController
+    pc:SetAutoBattle(not pc:IsAutoBattleEnabled())
+end

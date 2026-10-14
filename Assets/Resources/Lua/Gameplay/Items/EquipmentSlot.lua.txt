@@ -1,0 +1,13 @@
+---@enum EquipmentSlot
+local EquipmentSlot = {
+    MainHand = 1,
+    OffHand = 2,
+    Helmet = 3,
+    Chestplate = 4,
+    Leggings = 5,
+    Boots = 6,
+    Accessory = 7,
+    Necklace = 8
+}
+
+return EquipmentSlot

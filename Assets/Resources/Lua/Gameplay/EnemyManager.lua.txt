@@ -1,0 +1,54 @@
+local Object = require("Utils.classic")
+local EventSystem = require("Event.EventSystem")
+local EventType = require("Event.EventType")
+
+---@class EnemyManager 运行时敌人列表的持有者与生命周期管理者
+---@field enemies EnemyInstance[]
+local EnemyManager = Object:extend()
+
+function EnemyManager:New()
+    self.enemies = {}
+    EventSystem:RegisterListener(EventType.PlayerReachedBorder, nil, self, EnemyManager.OnWorldWrap)
+end
+
+---@param enemy EnemyInstance
+function EnemyManager:Add(enemy)
+    table.insert(self.enemies, enemy)
+end
+
+---@return integer
+function EnemyManager:Count()
+    return #self.enemies
+end
+
+---@return EnemyInstance[]
+function EnemyManager:GetAll()
+    return self.enemies
+end
+
+function EnemyManager:OnUpdate()
+    for i = #self.enemies, 1, -1 do
+        ---@type EnemyInstance
+        local enemy = self.enemies[i]
+        enemy:OnUpdate()
+        if enemy:IsDead() then
+            table.remove(self.enemies, i)
+        end
+    end
+end
+
+---清空当前所有敌人。保持原 Restart 行为：静默置死（不发事件），由下一帧 OnUpdate 移除。
+function EnemyManager:ClearAll()
+    for _, enemy in ipairs(self.enemies) do
+        enemy:SetHealthWithoutNotififaction(0)
+    end
+end
+
+---世界 wrap 事件：平移所有敌人的数据层 position
+function EnemyManager:OnWorldWrap(delta)
+    for _, enemy in ipairs(self.enemies) do
+        enemy.position = enemy.position + delta
+    end
+end
+
+return EnemyManager

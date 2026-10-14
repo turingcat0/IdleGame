@@ -1,0 +1,25 @@
+local EnemyVisualBounds = {
+
+    ["bat"] = { bottomY = -0.285 },
+    ["bear"] = { bottomY = -0.315 },
+    ["berserker"] = { bottomY = -0.16 },
+    ["boss_1"] = { bottomY = -0.19 },
+    ["boss_2"] = { bottomY = -0.195 },
+    ["boss_3"] = { bottomY = -0.1 },
+    ["boss_4"] = { bottomY = -0.24 },
+    ["boss_5"] = { bottomY = -0.195 },
+    ["boss_6"] = { bottomY = -0.175 },
+    ["cleric"] = { bottomY = -0.16 },
+    ["crusher"] = { bottomY = -0.16 },
+    ["dino"] = { bottomY = -0.13 },
+    ["dog"] = { bottomY = -0.13 },
+    ["eagle"] = { bottomY = -0.205 },
+    ["guard"] = { bottomY = -0.16 },
+    ["mage"] = { bottomY = -0.16 },
+    ["opossum"] = { bottomY = -0.14 },
+    ["paladin"] = { bottomY = -0.16 },
+    ["ranger"] = { bottomY = -0.16 },
+    ["rogue"] = { bottomY = -0.16 },
+}
+
+return EnemyVisualBounds

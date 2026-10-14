@@ -1,0 +1,7 @@
+--- Signature 槽位数量随等级解锁的阈值配置
+--- 按数组顺序遍历，取最后一个 level <= 当前等级 的条目
+return {
+    { level = 1,  signatureSlots = 1 },
+    { level = 10, signatureSlots = 2 },
+    { level = 25, signatureSlots = 3 },
+}

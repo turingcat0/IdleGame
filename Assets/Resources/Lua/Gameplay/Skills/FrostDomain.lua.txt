@@ -1,0 +1,21 @@
+local Skill = require("Gameplay.Skills.Skill")
+local EffectTypes = require("Config.Generated.EffectTypes")
+local EffectFactory = require("Gameplay.Effects.EffectFactory")
+
+---@class FrostDomain : Skill
+---冰霜领域：命中时降低目标速度（50%，5秒），配合击退形成控制链
+local FrostDomain = Skill:extend()
+
+function FrostDomain:OnCast(source, target)
+end
+
+---@param source Entity
+---@param target Entity
+---@param ctx DamageContext
+function FrostDomain:OnHit(source, target, ctx)
+    if not target then return end
+    local instance = EffectFactory.CreateInstance(EffectTypes.speed_down, target, source, 5, { value = -0.5 })
+    target:AddEffect(instance)
+end
+
+return FrostDomain

@@ -1,0 +1,88 @@
+local EventSystem   = require("Event.EventSystem")
+local EventType     = require("Event.EventType")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+
+---@type CS.UnityEngine.MonoBehaviour
+local self = self
+
+local canvas = nil
+local bgRect = nil
+local fillRect = nil
+local ghostRect = nil
+local nameText = nil
+local bossInstance = nil
+
+---用 offsetMax 收缩 RectTransform 右侧来表示血量（参考 EnemyView 头顶小血条）。
+---不用 fillAmount：BossBar 的 Fill/Ghost 是 Builder 代码生成的 Image、没有挂 Sprite，
+---Image 在 sprite==null 时走“纯色方块”渲染并提前返回，fillAmount/fillMethod 被完全忽略
+---（哪怕 Type=Filled），导致血条永远是满格不动。offsetMax 直接改 RectTransform 尺寸，
+---不依赖 Sprite / Image.Type，纯色方块也会随之收缩。
+function Start()
+    canvas = self.gameObject:GetComponent(typeof(CS.UnityEngine.Canvas))
+    nameText = self.transform:Find("BossName"):GetComponent(typeof(CS.TMPro.TMP_Text))
+
+    local bgTf = self.transform:Find("Border/Bg")
+    bgRect    = bgTf:GetComponent(typeof(CS.UnityEngine.RectTransform))
+    ghostRect = bgTf:Find("Ghost"):GetComponent(typeof(CS.UnityEngine.RectTransform))
+    fillRect  = bgTf:Find("Fill"):GetComponent(typeof(CS.UnityEngine.RectTransform))
+
+    ---初始满血：右内边距归零
+    fillRect.offsetMax  = CS.UnityEngine.Vector2.zero
+    ghostRect.offsetMax = CS.UnityEngine.Vector2.zero
+    if canvas then canvas.enabled = false end
+
+    EventSystem:RegisterListener(EventType.BossSpawned, nil, nil, OnBossSpawned)
+    EventSystem:RegisterListener(EventType.BossDefeated, nil, nil, OnBossDefeated)
+end
+
+function OnBossSpawned(boss)
+    bossInstance = boss
+    if nameText and boss and boss.enemy then
+        nameText.text = boss.enemy.name or ""
+    end
+    ---出场即满血，重置残影
+    fillRect.offsetMax  = CS.UnityEngine.Vector2.zero
+    ghostRect.offsetMax = CS.UnityEngine.Vector2.zero
+    if canvas then canvas.enabled = true end
+end
+
+function OnBossDefeated()
+    bossInstance = nil
+    if canvas then canvas.enabled = false end
+end
+
+function Update()
+    if not bossInstance or not canvas or not canvas.enabled then return end
+    if bossInstance:IsDead() then
+        bossInstance = nil
+        canvas.enabled = false
+        return
+    end
+
+    local fullWidth = bgRect.rect.width
+    if fullWidth <= 0 then return end ---首帧布局未就绪时跳过
+
+    local maxHealth = bossInstance.attributes[AttributeType.MaxHealth]:GetFinalValue()
+    local targetFill = math.max(0, math.min(1, bossInstance.health / maxHealth))
+
+    ---即时血量：把右侧内边距设为 -(1-fill)*fullWidth，方块从右侧收缩
+    fillRect.offsetMax = CS.UnityEngine.Vector2(
+        -(1 - targetFill) * fullWidth, fillRect.offsetMax.y)
+
+    ---残影滞后追赶：当前残影比例 = ghostRect.rect.width / fullWidth
+    local ghostFill = ghostRect.rect.width / fullWidth
+    local newGhostFill
+    if targetFill < ghostFill then
+        local dt = CS.UnityEngine.Time.deltaTime
+        newGhostFill = ghostFill + (targetFill - ghostFill) * math.min(1, dt * 2)
+    else
+        newGhostFill = targetFill
+    end
+    ghostRect.offsetMax = CS.UnityEngine.Vector2(
+        -(1 - newGhostFill) * fullWidth, ghostRect.offsetMax.y)
+end
+
+function OnDestroy()
+    EventSystem:RemoveListener(EventType.BossSpawned, nil, nil, OnBossSpawned)
+    EventSystem:RemoveListener(EventType.BossDefeated, nil, nil, OnBossDefeated)
+end

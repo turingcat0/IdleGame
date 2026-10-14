@@ -1,0 +1,29 @@
+local Skill = require("Gameplay.Skills.Skill")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+local EffectTypes = require("Config.Generated.EffectTypes")
+local EffectFactory = require("Gameplay.Effects.EffectFactory")
+
+---@class ServantHoly : Skill
+---侍从·圣光：释放时给所有友方单位挂护盾（吸收量 = 施法者攻击力的 80%，持续 8 秒）
+local ServantHoly = Skill:extend()
+
+local SHIELD_DURATION = 8
+local SHIELD_RATIO = 0.8
+
+function ServantHoly:OnCast(source, target)
+    local attackAttr = source.attributes and source.attributes[AttributeType.Attack]
+    local attack = attackAttr and attackAttr:GetFinalValue() or 10
+    local amount = attack * SHIELD_RATIO
+
+    local GameManager = require("GameManager")
+    local combatManager = GameManager.levelManager.combatManager
+    for _, ally in ipairs(combatManager:GetAllies()) do
+        local instance = EffectFactory.CreateInstance(EffectTypes.shield, ally, source, SHIELD_DURATION, { amount = amount })
+        ally:AddEffect(instance)
+    end
+end
+
+function ServantHoly:OnHit(source, target, ctx)
+end
+
+return ServantHoly

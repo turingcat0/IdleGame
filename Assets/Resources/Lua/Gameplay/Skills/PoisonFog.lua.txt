@@ -1,0 +1,29 @@
+local Skill = require("Gameplay.Skills.Skill")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+local EffectTypes = require("Config.Generated.EffectTypes")
+local EffectFactory = require("Gameplay.Effects.EffectFactory")
+
+---@class PoisonFog : Skill
+---毒雾：命中时对目标施加多层强力中毒（攻击力 60% DPS，5 秒）
+local PoisonFog = Skill:extend()
+
+function PoisonFog:OnCast(source, target)
+end
+
+---@param source Entity
+---@param target Entity
+---@param ctx DamageContext
+function PoisonFog:OnHit(source, target, ctx)
+    if not target then return end
+    local attackAttr = source.attributes and source.attributes[AttributeType.Attack]
+    local attack = attackAttr and attackAttr:GetFinalValue() or 100
+    local dps = attack * 0.6
+    local instance = EffectFactory.CreateInstance(EffectTypes.poison, target, source, 5, { dps = dps })
+    local applied = target:AddEffect(instance)
+    if applied then
+        applied:AddStack()
+        applied:AddStack()
+    end
+end
+
+return PoisonFog

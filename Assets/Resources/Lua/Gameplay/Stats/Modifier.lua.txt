@@ -1,0 +1,40 @@
+local Object = require("Utils.classic")
+local ModifierType = require("Gameplay.Stats.ModifierType")
+
+---@class Modifier 玩家的属性修改器
+---@field modifierType ModifierType
+---@field value number
+local Modifier = Object:extend()
+
+---
+---@param value number
+---@param modifierType ModifierType
+function Modifier:New(modifierType, value)
+    self.modifierType = modifierType
+    self.value = value
+end
+
+local function FlatAdd(baseValue, value)
+    return baseValue + value
+end
+
+local function Multiply(baseValue, value)
+    return baseValue * (1 + value)
+end
+
+---在值上应用修改器
+---@param baseValue number
+---@return number
+function Modifier:Apply(baseValue)
+    local Appliers =
+    {
+        [ModifierType.FlatAdd] = FlatAdd,
+        [ModifierType.Multiply] = Multiply
+    }
+
+    local applier = Appliers[self.modifierType]
+    return applier(baseValue, self.value)
+end
+
+
+return Modifier

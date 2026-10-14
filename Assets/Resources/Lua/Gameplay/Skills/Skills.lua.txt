@@ -1,0 +1,156 @@
+local Attribute = require("Gameplay.Stats.Attribute")
+local Skill     = require("Gameplay.Skills.Skill")
+
+local AttributeType = require("Gameplay.Stats.AttributeType")
+local SkillType     = require("Gameplay.Skills.SkillType")
+local Projectiles   = require("Gameplay.Projectiles.Projectiles")
+local SkillConfigs  = require("Config.Generated.Skills")
+-- 玩家技能子类
+local RendingSlash   = require("Gameplay.Skills.RendingSlash")
+local VenomCombo     = require("Gameplay.Skills.VenomCombo")
+local ThunderArrow   = require("Gameplay.Skills.ThunderArrow")
+local PiercingArrow  = require("Gameplay.Skills.PiercingArrow")
+local PoisonFog = require("Gameplay.Skills.PoisonFog")
+local HolyShield     = require("Gameplay.Skills.HolyShield")
+local FrostDomain    = require("Gameplay.Skills.FrostDomain")
+local StormRush      = require("Gameplay.Skills.StormRush")
+local ImmortalTotem  = require("Gameplay.Skills.ImmortalTotem")
+
+-- 敌人技能子类
+local CurseTouch     = require("Gameplay.Skills.CurseTouch")
+local EnrageAura     = require("Gameplay.Skills.EnrageAura")
+local PoisonSpit     = require("Gameplay.Skills.PoisonSpit")
+
+-- Boss 技能子类
+local SludgeBreath   = require("Gameplay.Skills.SludgeBreath")
+local LightningBolt  = require("Gameplay.Skills.LightningBolt")
+local ElderSmash     = require("Gameplay.Skills.ElderSmash")
+local ShadowStrike   = require("Gameplay.Skills.ShadowStrike")
+local BeetleFlame    = require("Gameplay.Skills.BeetleFlame")
+local FuryImpact     = require("Gameplay.Skills.FuryImpact")
+
+-- 随从技能子类
+local ServantHeal    = require("Gameplay.Skills.ServantHeal")
+local ServantFrenzy  = require("Gameplay.Skills.ServantFrenzy")
+local ServantHoly    = require("Gameplay.Skills.ServantHoly")
+
+---@class Skills
+---@field skills table<string, Skill>
+local Skills = {
+    skills = {}
+}
+
+---
+---@param id string
+---@param name string
+---@param skillType SkillType
+---@param range number
+---@param multiplier number
+---@param manaCost integer 这个是有符号的 正数表示会减少mana，负数表示会回复mana
+---@param duration number  技能演出/硬直时间
+---@param cooldown number  技能冷却时间
+---@param delay number
+---@param knockbackSpeed number 击退速度
+---@param knockbackDistance number 击退距离
+---@param projectile Projectile? 非 nil 为远程技能
+---@param substate integer? Animator 子状态，省略时回落到 skillType
+---@param unlockLevel integer? 玩家解锁等级，省略时默认为 1
+---@param aoeRange number? 命中点溅射半径，0 或省略表示单体
+function Skills:Register(id, name, skillType, range, multiplier, manaCost, duration, cooldown, delay, knockbackSpeed, knockbackDistance, projectile, substate, unlockLevel, aoeRange)
+    local attributes = {
+        [AttributeType.AttackRange] = Attribute(range),
+        [AttributeType.AttackMultiplier] = Attribute(multiplier),
+        [AttributeType.ManaCost] = Attribute(manaCost),
+        [AttributeType.KnockbackSpeed] = Attribute(knockbackSpeed),
+        [AttributeType.KnockbackDistance] = Attribute(knockbackDistance),
+        [AttributeType.AoERange] = Attribute(aoeRange or 0)
+    }
+    local skill = Skill(id, name, skillType, attributes, duration, cooldown, delay, projectile, substate, unlockLevel)
+
+    -- 普通技作为兜底fallback，演出结束时必须已经冷却完毕，否则 SkillSelector 可能无技能可放
+    if skillType == SkillType.Normal and cooldown >= duration then
+        print(string.format(
+            "[Skills] Normal skill '%s' should have cooldown < duration (got %.3f / %.3f) to guarantee fallback availability.",
+            id, cooldown, duration))
+    end
+
+    self.skills[id] = skill
+    return skill
+end
+
+for id, config in pairs(SkillConfigs) do
+    local projectile = config.projectileId and Projectiles[config.projectileId] or nil
+    Skills[id] = Skills:Register(
+        id,
+        config.name,
+        config.skillType,
+        config.range,
+        config.multiplier,
+        config.manaCost,
+        config.duration,
+        config.cooldown,
+        config.delay,
+        config.knockbackSpeed,
+        config.knockbackDistance,
+        projectile,
+        config.substate,
+        config.unlockLevel,
+        config.aoeRange
+    )
+end
+
+---用自定义子类替换指定 id 的技能
+---@param id string
+---@param subclass table
+local function OverrideSkill(id, subclass)
+    local base = Skills.skills[id]
+    if not base then
+        print(string.format("[Skills] cannot override unknown skill '%s'", id))
+        return
+    end
+    local skill = subclass(
+        base.id,
+        base.name,
+        base.skillType,
+        base.attributes,
+        base.duration,
+        base.cooldown,
+        base.delay,
+        base.projectile,
+        base.substate,
+        base.unlockLevel
+    )
+    Skills.skills[id] = skill
+    Skills[id] = skill
+end
+
+-- 玩家技能
+OverrideSkill("player_slash", RendingSlash)
+OverrideSkill("player_combo", VenomCombo)
+OverrideSkill("player_ranged", ThunderArrow)
+OverrideSkill("player_pierce", PiercingArrow)
+OverrideSkill("player_poison_fog", PoisonFog)
+OverrideSkill("player_signature", HolyShield)
+OverrideSkill("player_frost", FrostDomain)
+OverrideSkill("player_storm", StormRush)
+OverrideSkill("player_immortal", ImmortalTotem)
+
+-- 敌人技能
+OverrideSkill("enemy_curse", CurseTouch)
+OverrideSkill("enemy_enrage", EnrageAura)
+OverrideSkill("enemy_poison", PoisonSpit)
+
+-- Boss 技能
+OverrideSkill("boss_1_breath", SludgeBreath)
+OverrideSkill("boss_2_bolt", LightningBolt)
+OverrideSkill("boss_3_smash", ElderSmash)
+OverrideSkill("boss_4_dark", ShadowStrike)
+OverrideSkill("boss_5_flame", BeetleFlame)
+OverrideSkill("boss_6_fury", FuryImpact)
+
+-- 随从技能
+OverrideSkill("servant_heal", ServantHeal)
+OverrideSkill("servant_frenzy", ServantFrenzy)
+OverrideSkill("servant_holy", ServantHoly)
+
+return Skills

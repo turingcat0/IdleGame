@@ -1,0 +1,73 @@
+local Object = require("Utils.classic")
+local config = require("Config.progression")
+local EventSystem = require("Event.EventSystem")
+
+
+---@class Progression 玩家的经验值/等级
+local Progression = Object:extend()
+
+---配置表里的最大等级（数组型表，直接用长度）
+local maxLevel = #config
+
+---
+---@param level integer
+---@param exp integer
+function Progression:New(level, exp)
+    self.level = math.min(math.max(level, 1), maxLevel)
+    self.exp = exp
+    self.maxExp = config[self.level].expToNextLevel
+end
+
+---设置等级，不能超过配置表上限
+---@param level integer
+function Progression:SetLevel(level)
+    local oldValue = self.level
+    self.level = math.min(math.max(level, 1), maxLevel)
+    self.maxExp = config[self.level].expToNextLevel
+    EventSystem:FireLevelChangedEvent(self, oldValue, self.level)
+    EventSystem:FireExpChangedEvent(self, self.exp, self.exp)
+end
+
+---设置经验值，自动升级但不超过最大等级
+---@param exp integer
+function Progression:SetExp(exp)
+    local level = self.level
+    local old = self.exp
+    self.exp = exp
+    while self.level < maxLevel and self.exp >= config[self.level].expToNextLevel do
+        self.exp = self.exp - config[self.level].expToNextLevel
+        self.level = self.level + 1
+    end
+    if self.level >= maxLevel then
+        self.level = maxLevel
+        self.exp = math.min(self.exp, config[maxLevel].expToNextLevel)
+    end
+    self.maxExp = config[self.level].expToNextLevel
+    if self.level ~= level then
+        EventSystem:FireLevelChangedEvent(self, level, self.level)
+    end
+    EventSystem:FireExpChangedEvent(self, old, self.exp)
+end
+
+---添加经验 并自动升级，不能超过最大等级
+---@param exp integer
+function Progression:AddExp(exp)
+    local level = self.level
+    local old = self.exp
+    self.exp = self.exp + exp
+    while self.level < maxLevel and self.exp >= config[self.level].expToNextLevel do
+        self.exp = self.exp - config[self.level].expToNextLevel
+        self.level = self.level + 1
+    end
+    if self.level >= maxLevel then
+        self.level = maxLevel
+        self.exp = math.min(self.exp, config[maxLevel].expToNextLevel)
+    end
+    self.maxExp = config[self.level].expToNextLevel
+    if self.level ~= level then
+       EventSystem:FireLevelChangedEvent(self, level, self.level)
+    end
+     EventSystem:FireExpChangedEvent(self, old, self.exp)
+end
+
+return Progression

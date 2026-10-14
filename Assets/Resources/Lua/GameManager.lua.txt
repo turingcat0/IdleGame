@@ -1,0 +1,149 @@
+require("LuaPanda").start("127.0.0.1",8818)
+local Player = require("Gameplay.Entities.Player.Player")
+local PlayerController = require("Gameplay.Entities.Player.PlayerController")
+local LootManager      = require("Gameplay.Loots.LootManager")
+local TaskScheduler    = require("Utils.TaskScheduler")
+local UIManager        = require("Gameplay.UIManager")
+local LevelManager      = require("Gameplay.LevelManager")
+local VfxManager        = require("Gameplay.Vfx.VfxManager")
+local CombatStatsTracker = require("Gameplay.Combat.CombatStatsTracker")
+local SaveSystem       = require("Gameplay.Save.SaveSystem")
+local PlayerSave       = require("Gameplay.Save.PlayerSave")
+local SkillSave        = require("Gameplay.Save.SkillSave")
+local InventorySave    = require("Gameplay.Save.InventorySave")
+local WorldSave        = require("Gameplay.Save.WorldSave")
+local MetaSave         = require("Gameplay.Save.MetaSave")
+local ServantSave      = require("Gameplay.Save.ServantSave")
+local GuideSave        = require("Gameplay.Save.GuideSave")
+local GuideManager     = require("Gameplay.Guide.GuideManager")
+local DungeonSave      = require("Gameplay.Save.DungeonSave")
+local DungeonManager   = require("Gameplay.Dungeon.DungeonManager")
+local GachaManager     = require("Gameplay.Gacha.GachaManager")
+local GachaSave        = require("Gameplay.Save.GachaSave")
+local EventSystem      = require("Event.EventSystem")
+local EventType        = require("Event.EventType")
+
+---@class GameManager 服务注册表 + 组装根 + 顶层 tick 编排
+---@field player Player
+---@field playerController PlayerController
+---@field lootManager LootManager
+---@field uiManager UIManager
+---@field taskScheduler TaskScheduler
+---@field levelManager LevelManager
+---@field vfxManager VfxManager
+---@field combatStatsTracker CombatStatsTracker
+---@field guideManager GuideManager
+---@field totalPlayTime number 总游戏时长（秒）
+---@field deathCount integer 死亡次数
+---@field saveContext table 存档上下文
+local GameManager =
+{
+    player = nil,
+    playerController = nil,
+    lootManager = nil,
+    uiManager = UIManager(),
+    taskScheduler = TaskScheduler(),
+    levelManager = nil,
+    vfxManager = VfxManager(),
+    combatStatsTracker = CombatStatsTracker(),
+    guideManager = nil,
+    dungeonManager = nil,
+    gachaManager = nil,
+    totalPlayTime = 0,
+    deathCount = 0,
+    saveContext = nil,
+}
+
+local playerGo = CS.UnityEngine.GameObject.Find("Player")
+GameManager.player = Player(playerGo.transform.position.x, playerGo.transform.position.y)
+GameManager.playerController = PlayerController(GameManager.player)
+GameManager.levelManager = LevelManager(GameManager.player, GameManager.uiManager, GameManager.taskScheduler)
+GameManager.lootManager = LootManager()
+GameManager.combatStatsTracker:Init(GameManager.player)
+-- 必须早于下面的 SaveSystem.Load：GuideSave.Apply 要往 guideManager 里灌进度
+GameManager.guideManager = GuideManager(GameManager.player, GameManager.levelManager)
+-- 必须早于下面的 SaveSystem.Load：DungeonSave.Apply 要往 dungeonManager 里灌进度
+GameManager.dungeonManager = DungeonManager(GameManager.player, GameManager.levelManager, GameManager.uiManager)
+GameManager.levelManager.dungeonManager = GameManager.dungeonManager
+-- 必须早于下面的 SaveSystem.Load：GachaSave.Apply 要往 gachaManager 里灌保底进度
+GameManager.gachaManager = GachaManager()
+GameManager.gachaManager:Init(GameManager.player)
+
+-- 注册存档模块
+-- 注意：Apply 按注册顺序执行；inventory 必须在 player 之前，
+-- 否则 PlayerSave  clamp 血量/蓝量时还没有装备加成，会导致读档后生命/法力被错误压低
+SaveSystem.RegisterModule("inventory", InventorySave)
+SaveSystem.RegisterModule("player", PlayerSave)
+SaveSystem.RegisterModule("skills", SkillSave)
+SaveSystem.RegisterModule("world", WorldSave)
+SaveSystem.RegisterModule("meta", MetaSave)
+SaveSystem.RegisterModule("servants", ServantSave)
+SaveSystem.RegisterModule("gacha", GachaSave)
+SaveSystem.RegisterModule("guide", GuideSave)
+SaveSystem.RegisterModule("dungeon", DungeonSave)
+
+-- 构造存档上下文
+GameManager.saveContext = {
+    player = GameManager.player,
+    levelManager = GameManager.levelManager,
+    gameManager = GameManager
+}
+
+-- 自动读档；无档或读档失败则从 stage_1_1 新游戏
+local ok, loadErr = pcall(function()
+    if SaveSystem.HasSave() then
+        SaveSystem.Load(GameManager.saveContext)
+    end
+end)
+if not ok then
+    print("[GameManager] Save load failed, starting new game: " .. tostring(loadErr))
+    SaveSystem.Delete()
+end
+
+if GameManager.levelManager.savedStageId then
+    GameManager.levelManager:StartStage(GameManager.levelManager.savedStageId)
+    GameManager.levelManager.currentWaveIndex = GameManager.levelManager.savedWaveIndex
+    GameManager.levelManager.allWavesCompleted = GameManager.levelManager.savedAllWavesCompleted
+    if GameManager.levelManager.allWavesCompleted then
+        GameManager.levelManager.lastWaveConfig = GameManager.levelManager.waves[#GameManager.levelManager.waves]
+    end
+else
+    GameManager.levelManager:StartStage("stage_1_1")
+end
+
+-- 退出游戏时自动存档
+local lifecycleGo = CS.UnityEngine.GameObject("GameLifecycleBridge")
+local bridge = lifecycleGo:AddComponent(typeof(CS.xluaDemo.GameLifecycleBridge))
+bridge:SetOnQuitCallback(function()
+    SaveSystem.Save(GameManager.saveContext)
+end)
+
+function GameManager:Update()
+    self.totalPlayTime = self.totalPlayTime + CS.UnityEngine.Time.deltaTime
+    -- 自动战斗决策先于玩家更新，确保本帧内生效
+    self.playerController:OnUpdate()
+    self.player:OnUpdate()
+    self.levelManager:OnUpdate()
+    self.taskScheduler:OnUpdate()
+    self.guideManager:OnUpdate()
+end
+
+function GameManager:SaveGame()
+    SaveSystem.Save(self.saveContext)
+end
+
+function GameManager:OnWaveChanged(oldWaveIndex, newWaveIndex)
+    self:SaveGame()
+end
+
+function GameManager:OnEntityDied(entity, killer)
+    if entity == self.player then
+        self.deathCount = self.deathCount + 1
+    end
+end
+
+-- 注册事件监听（必须在函数定义之后，否则存进去的是 nil）
+EventSystem:RegisterListener(EventType.WaveChanged, nil, GameManager, GameManager.OnWaveChanged)
+EventSystem:RegisterListener(EventType.EntityDied, nil, GameManager, GameManager.OnEntityDied)
+
+return GameManager

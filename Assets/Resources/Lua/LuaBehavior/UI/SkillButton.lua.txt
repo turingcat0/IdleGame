@@ -1,0 +1,29 @@
+---@type CS.UnityEngine.MonoBehaviour
+local self = self
+
+---@type CS.UnityEngine.UI.Button
+local button = nil
+
+function Start()
+    button = self:GetComponent(typeof(CS.UnityEngine.UI.Button))
+    button.onClick:AddListener(OnButtonClicked)
+end
+
+function OnDestroy()
+    if button then
+        button.onClick:RemoveListener(OnButtonClicked)
+    end
+end
+
+function OnButtonClicked()
+    local windowGo = CS.UnityEngine.GameObject.Find("SkillWindow")
+    if not windowGo then
+        print("[SkillButton] 找不到 SkillWindow")
+        return
+    end
+
+    local lb = windowGo:GetComponent(typeof(CS.LuaBehaviour))
+    if lb and lb.scriptEnv then
+        lb.scriptEnv.Show()
+    end
+end

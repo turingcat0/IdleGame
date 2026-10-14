@@ -1,0 +1,70 @@
+local Items = require("Gameplay.Items.Items")
+local ItemInstance = require("Gameplay.Items.ItemInstance")
+local EquipmentSlot = require("Gameplay.Items.EquipmentSlot")
+
+---@class InventorySave 背包与装备存档模块
+local InventorySave = {}
+
+---收集背包与装备状态
+---@param context table
+---@return table
+function InventorySave.Collect(context)
+    local inventory = context.player and context.player.inventory
+
+    local slots = {}
+    for _, slotId in pairs(EquipmentSlot) do
+        local itemInstance = inventory:GetSlot(slotId)
+        if itemInstance then
+            slots[tostring(slotId)] = {
+                itemId = itemInstance.item.id,
+                level = itemInstance.level,
+                uuid = itemInstance.uuid,
+            }
+        end
+    end
+
+    return {
+        coins = inventory.coins,
+        crystals = inventory.crystals,
+        essence = inventory.essence,
+        slots = slots,
+    }
+end
+
+---将存档数据应用到背包
+---@param context table
+---@param data table
+function InventorySave.Apply(context, data)
+    local inventory = context.player and context.player.inventory
+
+    -- 先清空所有装备槽，避免旧装备属性叠加
+    for _, slotId in pairs(EquipmentSlot) do
+        inventory:TrySetSlot(slotId, nil)
+    end
+
+    inventory.coins = tonumber(data.coins) or 0
+    inventory.crystals = tonumber(data.crystals) or 0
+    inventory.essence = tonumber(data.essence) or 0
+
+    for slotIdStr, itemData in pairs(data.slots or {}) do
+        local item = Items[itemData.itemId]
+        if item then
+            local instance = ItemInstance(item, tonumber(itemData.level) or 1)
+            instance.uuid = itemData.uuid or instance.uuid
+            inventory:TrySetSlot(tonumber(slotIdStr), instance)
+        end
+    end
+end
+
+---默认背包数据
+---@return table
+function InventorySave.Default()
+    return {
+        coins = 0,
+        crystals = 0,
+        essence = 0,
+        slots = {},
+    }
+end
+
+return InventorySave

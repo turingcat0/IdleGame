@@ -1,0 +1,11 @@
+---@enum EntityState
+local EntityState =
+{
+    Idling = 0,
+    Walking = 1,
+    Dead = 2,
+    ExlusiveEffect = 3,
+    Attacking = 4,
+    Hurt = 5
+}
+return EntityState

@@ -1,0 +1,84 @@
+local Object = require("Utils.classic")
+
+---@class EffectInstance 运行时效果实例
+---@field definition EffectDefinition 效果定义引用
+---@field target Entity              拥有者
+---@field source Entity?             施加者
+---@field duration number            总持续时间（秒），0 表示永久
+---@field remaining number           剩余时间（秒）
+---@field stacks number              当前叠层
+---@field expired boolean            是否已标记待移除
+---@field params table               运行时参数（如 amount/dps/value）
+local EffectInstance = Object:extend()
+
+---@param definition EffectDefinition
+---@param target Entity
+---@param source Entity?
+---@param duration number?
+---@param params table?
+function EffectInstance:New(definition, target, source, duration, params)
+    self.definition = definition
+    self.target = target
+    self.source = source
+    self.duration = duration or 0
+    self.remaining = self.duration
+    self.stacks = 1
+    self.expired = false
+    self.params = params or {}
+end
+
+---增加一层，通常同时刷新持续时间
+function EffectInstance:AddStack()
+    if self.stacks < self.definition.maxStacks then
+        self.stacks = self.stacks + 1
+    end
+    self:Refresh()
+end
+
+---刷新剩余时间到最大值
+function EffectInstance:Refresh()
+    self.remaining = self.duration
+end
+
+---效果被添加时调用，默认转发到 definition
+function EffectInstance:OnApply()
+    self.definition:OnApply(self.target, self.source, self.params)
+end
+
+---拥有者每帧更新时调用，默认转发到 definition
+---@param deltaTime number
+function EffectInstance:OnUpdate(deltaTime)
+    self.definition:OnUpdate(self.target, self.source, self.params, deltaTime)
+end
+
+---效果失效时调用，默认转发到 definition
+function EffectInstance:OnExpire()
+    self.definition:OnExpire(self.target, self.source, self.params)
+end
+
+---伤害 pipeline：Modify 阶段，默认转发到 definition
+---@param ctx DamageContext
+function EffectInstance:OnModifyDamage(ctx)
+    self.definition:OnModifyDamage(self.target, self.source, self.params, ctx)
+end
+
+---伤害 pipeline：Mitigate 阶段，默认转发到 definition
+---@param ctx DamageContext
+function EffectInstance:OnMitigateDamage(ctx)
+    self.definition:OnMitigateDamage(self.target, self.source, self.params, ctx)
+end
+
+---伤害 pipeline：Intercept 阶段，默认转发到 definition
+---@param ctx DamageContext
+---@return boolean? 护盾耗尽等情况下返回 true，表示实例应被移除
+function EffectInstance:OnInterceptDamage(ctx)
+    return self.definition:OnInterceptDamage(self.target, self.source, self.params, ctx)
+end
+
+---伤害 pipeline：Post 阶段，默认转发到 definition
+---@param ctx DamageContext
+function EffectInstance:OnPostDamage(ctx)
+    self.definition:OnPostDamage(self.target, self.source, self.params, ctx)
+end
+
+return EffectInstance

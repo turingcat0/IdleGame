@@ -1,0 +1,20 @@
+local EffectDefinition = require("Gameplay.Effects.EffectDefinition")
+
+---@class StunEffectDefinition : EffectDefinition
+local StunEffectDefinition = EffectDefinition:extend()
+
+---@param target Entity
+---@param source Entity?
+---@param params table?
+function StunEffectDefinition:OnApply(target, source, params)
+    target:SetStunned(true)
+end
+
+---@param target Entity
+---@param source Entity?
+---@param params table?
+function StunEffectDefinition:OnExpire(target, source, params)
+    target:SetStunned(false)
+end
+
+return StunEffectDefinition

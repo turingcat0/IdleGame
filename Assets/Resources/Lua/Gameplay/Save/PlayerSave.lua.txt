@@ -1,0 +1,51 @@
+local AttributeType = require("Gameplay.Stats.AttributeType")
+
+---@class PlayerSave 玩家状态存档模块
+local PlayerSave = {}
+
+---收集玩家状态
+---@param context table
+---@return table
+function PlayerSave.Collect(context)
+    local player = context.player
+
+    return {
+        level = player.progression.level,
+        exp = player.progression.exp,
+        health = player.health,
+        mana = player.mana,
+        position = player.position,
+    }
+end
+
+---将存档数据应用到玩家
+---@param context table
+---@param data table
+function PlayerSave.Apply(context, data)
+    local player = context.player
+
+    player.progression:SetLevel(tonumber(data.level) or 1)
+    player.progression:SetExp(tonumber(data.exp) or 0)
+
+    local maxHealth = player.attributes[AttributeType.MaxHealth]:GetFinalValue()
+    local maxMana = player.attributes[AttributeType.MaxMana]:GetFinalValue()
+    -- 血量不能为 0，避免读档时再次触发死亡事件
+    player:SetHealth(math.min(math.max(tonumber(data.health) or maxHealth, 1), maxHealth))
+    player:SetMana(math.min(math.max(tonumber(data.mana) or maxMana, 0), maxMana))
+
+    player.position = tonumber(data.position) or player.position
+end
+
+---默认玩家数据
+---@return table
+function PlayerSave.Default()
+    return {
+        level = 1,
+        exp = 0,
+        health = 100,
+        mana = 100,
+        position = 0,
+    }
+end
+
+return PlayerSave

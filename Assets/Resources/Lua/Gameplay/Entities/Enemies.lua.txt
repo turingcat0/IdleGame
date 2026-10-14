@@ -1,0 +1,66 @@
+local Enemy = require "Gameplay.Entities.Enemy"
+local AttributeType = require "Gameplay.Stats.AttributeType"
+local Skills        = require "Gameplay.Skills.Skills"
+local Attribute = require("Gameplay.Stats.Attribute")
+local EnemyConfigs = require("Config.Generated.Enemies")
+
+---@class Enemies
+local Enemies = {
+    enemies = {}
+}
+
+
+---
+---@param id string
+---@param name string
+---@param attack number
+---@param defense number
+---@param speed number
+---@param maxHealth number
+---@param critChance number
+---@param critDamage number
+---@param expReward number
+---@param skill Skill
+---@param isBoss boolean
+---@param size number? 运行时缩放倍率，默认 1
+---@param dropRate number? 装备掉落概率，默认 0
+---@param dropRarityBonus integer? 掉落品质等级加成，默认 0
+---@param enemyType string? 怪物类型 normal / elite / boss
+---@return Enemy
+function Enemies:Register(id, name, attack, defense, speed, maxHealth, critChance, critDamage, expReward, skill, isBoss, size, dropRate, dropRarityBonus, enemyType)
+    local attributes = {}
+    attributes[AttributeType.Attack] = Attribute(attack)
+    attributes[AttributeType.Defense] = Attribute(defense)
+    attributes[AttributeType.Speed] = Attribute(speed)
+    attributes[AttributeType.MaxHealth] = Attribute(maxHealth)
+    --- 敌人不吃法力：上限和当前值都是 0，技能 manaCost 也是 0，扣费判定天然恒真
+    attributes[AttributeType.MaxMana] = Attribute(0)
+    attributes[AttributeType.CritChance] = Attribute(critChance)
+    attributes[AttributeType.CritDamage] = Attribute(critDamage)
+    attributes[AttributeType.ExpReward] = Attribute(expReward)
+    local enemy = Enemy(id, name, attributes, skill, isBoss, size, dropRate, dropRarityBonus, enemyType)
+    table.insert(self.enemies, enemy)
+    return enemy
+end
+
+for id, config in pairs(EnemyConfigs) do
+    Enemies[id] = Enemies:Register(
+        id,
+        config.name,
+        config.attack,
+        config.defense,
+        config.speed,
+        config.maxHealth,
+        config.critChance,
+        config.critDamage,
+        config.expReward,
+        Skills[config.skillId],
+        config.isBoss,
+        config.size,
+        config.dropRate,
+        config.dropRarityBonus,
+        config.enemyType
+    )
+end
+
+return Enemies

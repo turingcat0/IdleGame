@@ -1,0 +1,28 @@
+local ServantView = require "Gameplay.Entities.Servants.ServantView"
+---@type ServantView
+local servantView = nil
+---@type ServantInstance
+local servantInst = nil
+
+function Start()
+
+end
+
+function Init(go, servantInstance)
+    servantInst = servantInstance
+    servantView = ServantView(go, servantInstance)
+end
+
+---供抛射物命中时反查所属实体
+---@return ServantInstance
+function GetEntity()
+    return servantInst
+end
+
+function Update()
+    servantView:OnUpdate()
+end
+
+function OnDestroy()
+    servantView:Dispose()
+end

@@ -1,0 +1,409 @@
+local EventType = require("Event.EventType")
+---@class EventSystem
+---@field listeners table<EventType ,table<any, {object: any, listener: function}[]>>
+local EventSystem = {
+    listeners = {}
+}
+
+
+---通用的监听器注册
+---@param event EventType
+---@param target any? target为空时则所有同类事件都会调用这个触发器
+---@param object any
+---@param listener function
+function EventSystem:RegisterListener(event, target, object, listener)
+    local eventTable = self.listeners[event]
+    if not eventTable then
+        eventTable = {}
+        self.listeners[event] = eventTable
+    end
+    if not target then
+        target = self
+    end
+    local eventObjectTable = eventTable[target]
+    if not eventObjectTable then
+        eventObjectTable = {}
+        eventTable[target] = eventObjectTable
+    end
+
+    table.insert(eventObjectTable, {object = object, listener = listener})
+end
+
+---通用的触发事件
+---@param event EventType
+---@param target any
+---@param ... any
+function EventSystem:FireEvent(event, target, ...)
+    local eventTable = self.listeners[event]
+    if eventTable then
+        local eventObjectTable = eventTable[target]
+        if eventObjectTable then
+            for _, pair in ipairs(eventObjectTable) do
+                if pair.object then
+                    pair.listener(pair.object, ...)
+                else
+                    pair.listener(...)
+                end
+            end
+        end
+        eventObjectTable = eventTable[self]
+        if eventObjectTable then
+            for _, pair in ipairs(eventObjectTable) do
+                if pair.object then
+                    pair.listener(pair.object, ...)
+                else
+                    pair.listener(...)
+                end
+            end
+        end
+    end
+end
+
+---通用的移除监听器
+---@param event EventType
+---@param target any?
+---@param object any
+---@param listener function
+function EventSystem:RemoveListener(event, target, object, listener)
+    if not target then
+        target = self
+    end
+    --既然都是移除了，没加过的listener移除就让它爆掉好了
+    for i, pair in ipairs(self.listeners[event][target]) do
+        if pair.listener == listener and pair.object == object then
+            table.remove(self.listeners[event][target], i)
+            return
+        end
+    end
+end
+
+
+
+
+
+---注册属性变动监听器
+---@param entity Entity
+---@param attributeType AttributeType
+---@param object any
+---@param listener function
+function EventSystem:RegisterAttributeChangedListener(entity, attributeType, object, listener)
+    self:RegisterListener(EventType.AttributeChanged, entity.attributes[attributeType], object, listener)
+end
+
+
+---触发属性变动事件
+---@param attribute Attribute
+function EventSystem:FireAttributeChangedEvent(attribute)
+    self:FireEvent(EventType.AttributeChanged, attribute)
+end
+
+---移除属性变动监听器
+---@param entity Entity
+---@param attributeType AttributeType
+---@param object any
+---@param listener function
+function EventSystem:RemoveAttributeChangedListener(entity, attributeType, object, listener)
+    self:RemoveListener(EventType.AttributeChanged, entity.attributes[attributeType], object, listener)
+end
+
+
+---注册等级变动监听器
+---@param player Player
+---@param object any
+---@param listener function
+function EventSystem:RegisterLevelChangedListener(player, object, listener)
+    self:RegisterListener(EventType.LevelChanged, player.progression, object, listener)
+end
+
+
+---触发等级变动事件
+---@param progression Progression
+---@param oldValue number
+---@param newValue number
+function EventSystem:FireLevelChangedEvent(progression, oldValue, newValue)
+    self:FireEvent(EventType.LevelChanged, progression, oldValue, newValue)
+end
+
+---移除等级变动监听器
+---@param player Player
+---@param object any
+---@param listener function
+function EventSystem:RemoveLevelChangedListener(player, object, listener)
+    self:RemoveListener(EventType.LevelChanged, player.progression, object, listener)
+end
+
+---注册经验变动监听器
+---@param player Player
+---@param object any
+---@param listener function
+function EventSystem:RegisterExpChangedListener(player, object, listener)
+    self:RegisterListener(EventType.ExpChanged, player.progression, object, listener)
+end
+
+
+---触发经验变动事件
+---@param progression Progression
+---@param oldValue number
+---@param newValue number
+function EventSystem:FireExpChangedEvent(progression, oldValue, newValue)
+    self:FireEvent(EventType.ExpChanged, progression, oldValue, newValue)
+end
+
+---移除经验变动监听器
+---@param player Player
+---@param object any
+---@param listener function
+function EventSystem:RemoveExpChangedListener(player, object, listener)
+    self:RemoveListener(EventType.ExpChanged, player.progression, object, listener)
+end
+
+
+---注册金币变动监听器
+---@param player Player
+---@param object any
+---@param listener function
+function EventSystem:RegisterCoinsChangedListener(player, object, listener)
+    self:RegisterListener(EventType.CoinChanged, player.inventory, object, listener)
+end
+
+
+
+---移除金币变动监听器
+---@param player Player
+---@param object any
+---@param listener function
+function EventSystem:RemoveCoinsChangedListener(player, object, listener)
+    self:RemoveListener(EventType.CoinChanged, player.inventory, object, listener)
+end
+
+
+---注册水晶变动监听器
+---@param player Player
+---@param object any
+---@param listener function
+function EventSystem:RegisterCrystalChangedListener(player, object, listener)
+    self:RegisterListener(EventType.CrystalChanged, player.inventory, object, listener)
+end
+
+
+
+---移除水晶变动监听器
+---@param player Player
+---@param object any
+---@param listener function
+function EventSystem:RemoveCrystalChangedListener(player, object, listener)
+    self:RemoveListener(EventType.CrystalChanged, player.inventory, object, listener)
+end
+
+---注册精魄变动监听器
+---@param player Player
+---@param object any
+---@param listener function
+function EventSystem:RegisterEssenceChangedListener(player, object, listener)
+    self:RegisterListener(EventType.EssenceChanged, player.inventory, object, listener)
+end
+
+
+---移除精魄变动监听器
+---@param player Player
+---@param object any
+---@param listener function
+function EventSystem:RemoveEssenceChangedListener(player, object, listener)
+    self:RemoveListener(EventType.EssenceChanged, player.inventory, object, listener)
+end
+
+---注册装备变动监听器
+---@param player Player
+---@param object any
+---@param listener function
+function EventSystem:RegisterEquipmentChangedListener(player, object, listener)
+    self:RegisterListener(EventType.EquipmentChanged, player.inventory, object, listener)
+end
+
+
+
+---移除装备变动监听器
+---@param player Player
+---@param object any
+---@param listener function
+function EventSystem:RemoveEquipmentChangedListener(player, object, listener)
+    self:RemoveListener(EventType.EquipmentChanged, player.inventory, object, listener)
+end
+
+---触发精魄变动事件
+---@param inventory PlayerInventory
+---@param oldValue integer
+---@param newValue integer
+function EventSystem:FireEssenceChangedEvent(inventory, oldValue, newValue)
+    self:FireEvent(EventType.EssenceChanged, inventory, oldValue, newValue)
+end
+
+---触发装备变动事件
+---@param inventory PlayerInventory
+---@param player Player
+---@param slot EquipmentSlot
+---@param oldEquipment ItemInstance
+---@param newEquipment ItemInstance
+function EventSystem:FireEquipmentChangedEvent(inventory, player, slot, oldEquipment, newEquipment)
+    self:FireEvent(EventType.EquipmentChanged, inventory, player, slot, oldEquipment, newEquipment)
+end
+
+
+--[[
+    其实感觉下面这些不用写也可以, 但暂时先不删
+]]
+
+---注册生命值监听器
+---@param entity Entity
+---@param object any
+---@param listener function
+function EventSystem:RegisterHealthChangedListener(entity, object, listener)
+    self:RegisterListener(EventType.HealthChanged, entity, object, listener)
+end
+
+
+---触发生命值变动事件
+---@param entity Entity
+---@param oldValue number
+---@param newValue number
+function EventSystem:FireHealthChangedEvent(entity, oldValue, newValue)
+    self:FireEvent(EventType.HealthChanged, entity, oldValue, newValue)
+end
+
+---移除监听器
+---@param entity Entity
+---@param object any
+---@param listener function
+function EventSystem:RemoveHealthChangedListener(entity, object, listener)
+    self:RemoveListener(EventType.HealthChanged, entity, object, listener)
+end
+
+---注册魔力变动监听器
+---@param entity Entity
+---@param object any
+---@param listener function
+function EventSystem:RegisterManaChangedListener(entity, object, listener)
+    self:RegisterListener(EventType.ManaChanged, entity, object, listener)
+end
+
+
+---触发魔力变动事件
+---@param entity Entity
+---@param oldValue number
+---@param newValue number
+function EventSystem:FireManaChangedEvent(entity, oldValue, newValue)
+    self:FireEvent(EventType.ManaChanged, entity, oldValue, newValue)
+end
+
+---移除监听器
+---@param entity Entity
+---@param object any
+---@param listener function
+function EventSystem:RemoveManaChangedListener(entity, object, listener)
+    self:RemoveListener(EventType.ManaChanged, entity, object, listener)
+end
+
+---触发技能释放事件（释放特效挂在 source）
+---@param source Entity
+---@param skill Skill
+function EventSystem:FireSkillCastEvent(source, skill)
+    self:FireEvent(EventType.SkillCast, source, source, skill)
+end
+
+---触发技能命中事件（命中特效挂在 target）
+---@param target Entity
+---@param source Entity
+---@param skill Skill
+function EventSystem:FireSkillHitEvent(target, source, skill)
+    self:FireEvent(EventType.SkillHit, target, target, source, skill)
+end
+
+---注册效果添加监听器
+---@param entity Entity
+---@param object any
+---@param listener function
+function EventSystem:RegisterEffectAddedListener(entity, object, listener)
+    self:RegisterListener(EventType.EffectAdded, entity, object, listener)
+end
+
+---触发效果添加事件
+---@param entity Entity
+---@param effect Effect
+function EventSystem:FireEffectAddedEvent(entity, effect)
+    self:FireEvent(EventType.EffectAdded, entity, effect)
+end
+
+---移除效果添加监听器
+---@param entity Entity
+---@param object any
+---@param listener function
+function EventSystem:RemoveEffectAddedListener(entity, object, listener)
+    self:RemoveListener(EventType.EffectAdded, entity, object, listener)
+end
+
+---注册效果移除监听器
+---@param entity Entity
+---@param object any
+---@param listener function
+function EventSystem:RegisterEffectRemovedListener(entity, object, listener)
+    self:RegisterListener(EventType.EffectRemoved, entity, object, listener)
+end
+
+---触发效果移除事件
+---@param entity Entity
+---@param effect Effect
+function EventSystem:FireEffectRemovedEvent(entity, effect)
+    self:FireEvent(EventType.EffectRemoved, entity, effect)
+end
+
+---移除效果移除监听器
+---@param entity Entity
+---@param object any
+---@param listener function
+function EventSystem:RemoveEffectRemovedListener(entity, object, listener)
+    self:RemoveListener(EventType.EffectRemoved, entity, object, listener)
+end
+
+---注册效果层数变化监听器
+---@param entity Entity
+---@param object any
+---@param listener function
+function EventSystem:RegisterEffectStackChangedListener(entity, object, listener)
+    self:RegisterListener(EventType.EffectStackChanged, entity, object, listener)
+end
+
+---触发效果层数变化事件
+---@param entity Entity
+---@param effect Effect
+---@param oldStacks number
+---@param newStacks number
+function EventSystem:FireEffectStackChangedEvent(entity, effect, oldStacks, newStacks)
+    self:FireEvent(EventType.EffectStackChanged, entity, effect, oldStacks, newStacks)
+end
+
+---移除效果层数变化监听器
+---@param entity Entity
+---@param object any
+---@param listener function
+function EventSystem:RemoveEffectStackChangedListener(entity, object, listener)
+    self:RemoveListener(EventType.EffectStackChanged, entity, object, listener)
+end
+
+---触发效果造成伤害事件
+---@param source Entity
+---@param target Entity
+---@param definition EffectDefinition
+---@param amount number
+function EventSystem:FireEffectDamageDealtEvent(source, target, definition, amount)
+    self:FireEvent(EventType.EffectDamageDealt, source, target, definition, amount)
+end
+
+---触发效果吸收伤害事件
+---@param target Entity
+---@param definition EffectDefinition
+---@param amount number
+function EventSystem:FireEffectDamageAbsorbedEvent(target, definition, amount)
+    self:FireEvent(EventType.EffectDamageAbsorbed, target, definition, amount)
+end
+
+return EventSystem

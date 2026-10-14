@@ -1,0 +1,55 @@
+local Object = require("Utils.classic")
+
+---@class PlayerController
+---@field player Player
+---@field autoBattleEnabled boolean
+local PlayerController = Object:extend()
+
+function PlayerController:New(player)
+    self.player = player
+    self.autoBattleEnabled = true
+end
+
+function PlayerController:TryAttack()
+    if self.player.idle then
+        self:WakeUp()
+    else
+        self:Attack()
+    end
+end
+
+function PlayerController:Attack()
+    self.player:TryCast()
+end
+
+function PlayerController:WakeUp()
+    self.player:WakeUp()
+end
+
+function PlayerController:CanAttack()
+    return self.player:CanAttack()
+end
+
+---开关自动战斗
+---@param enabled boolean
+function PlayerController:SetAutoBattle(enabled)
+    self.autoBattleEnabled = enabled
+end
+
+---@return boolean
+function PlayerController:IsAutoBattleEnabled()
+    return self.autoBattleEnabled
+end
+
+---自动战斗每帧 tick，需要在 GameManager:Update 中先于 player:OnUpdate 调用
+function PlayerController:OnUpdate()
+    if not self.autoBattleEnabled then return end
+    if self.player:IsDead() then return end
+
+    -- auto-battle 只负责已唤醒后的自动攻击；唤醒由玩家手动点击键触发
+    if not self.player.idle and self.player:CanAttack() then
+        self:Attack()
+    end
+end
+
+return PlayerController

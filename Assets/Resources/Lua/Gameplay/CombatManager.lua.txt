@@ -1,0 +1,236 @@
+local Object = require("Utils.classic")
+local utils  = require("Utils.utils")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+local EventSystem = require("Event.EventSystem")
+local EventType   = require("Event.EventType")
+local DamageContext = require("Gameplay.Combat.DamageContext")
+
+---@class CombatManager
+---@field player Player
+---@field servantManager ServantManager
+local CombatManager = Object:extend()
+
+function CombatManager:New(player, enemyManager, servantManager, spawner, uiManager)
+    self.player = player
+    self.enemyManager = enemyManager
+    self.servantManager = servantManager
+    self.spawner = spawner
+    self.uiManager = uiManager
+    self.delayedAttacks = {}
+end
+
+function CombatManager.DistanceOf(player, enemy)
+    return enemy.position - player.position
+end
+
+---玩家阵营的全部单位：玩家本人 + 在场存活的主随从
+---@return Entity[]
+function CombatManager:GetAllies()
+    local allies = { self.player }
+    for _, servant in ipairs(self.servantManager:GetAll()) do
+        if not servant:IsDead() then
+            table.insert(allies, servant)
+        end
+    end
+    return allies
+end
+
+---找到可以选中的目标
+---@param entity Entity
+---@param skill Skill
+---@return Entity[]
+function CombatManager:SelectGoal(entity, skill)
+    local goals = {}
+    if utils.Contains(entity.tags, "enemy") then
+        --- 敌人只打射程内最近的一个友方单位，随从因此能替玩家挡刀
+        local nearest = nil
+        local nearestDistance = 0
+        for _, ally in ipairs(self:GetAllies()) do
+            local distance = self.DistanceOf(ally, entity)
+            if distance < skill:Get(AttributeType.AttackRange) then
+                if not nearest or math.abs(distance) < nearestDistance then
+                    nearest = ally
+                    nearestDistance = math.abs(distance)
+                end
+            end
+        end
+        if nearest then
+            table.insert(goals, nearest)
+        end
+    end
+
+    if utils.Contains(entity.tags, "player") then
+        for _, enemy in ipairs(self.enemyManager:GetAll()) do
+            local distance = self.DistanceOf(entity, enemy)
+            if distance < skill:Get(AttributeType.AttackRange) then
+                table.insert(goals, enemy)
+            end
+        end
+    end
+    return goals
+end
+
+---只取射程内最近的一个敌对目标，aoe 技能用它选定唯一命中点，溅射由 ResolveHit 负责
+---@param entity Entity
+---@param skill Skill
+---@return Entity[]
+function CombatManager:SelectOne(entity, skill)
+    local nearest = nil
+    local nearestDistance = math.huge
+
+    if utils.Contains(entity.tags, "enemy") then
+        for _, ally in ipairs(self:GetAllies()) do
+            local distance = self.DistanceOf(ally, entity)
+            if distance < skill:Get(AttributeType.AttackRange) and math.abs(distance) < nearestDistance then
+                nearest = ally
+                nearestDistance = math.abs(distance)
+            end
+        end
+    elseif utils.Contains(entity.tags, "player") then
+        for _, enemy in ipairs(self.enemyManager:GetAll()) do
+            local distance = self.DistanceOf(entity, enemy)
+            if distance < skill:Get(AttributeType.AttackRange) and math.abs(distance) < nearestDistance then
+                nearest = enemy
+                nearestDistance = math.abs(distance)
+            end
+        end
+    end
+
+    return nearest and { nearest } or {}
+end
+
+---使用技能
+---@param entity Entity
+---@param skill Skill
+function CombatManager:UseSkill(entity, skill)
+    EventSystem:FireSkillCastEvent(entity, skill)
+    skill:OnCast(entity, nil)
+
+    --- 纯功能技能（无抛射物且倍率为 0）不进伤害流程，否则会给射程内每个敌人弹出 0 伤害
+    if not skill.projectile and skill:Get(AttributeType.AttackMultiplier) == 0 then
+        return
+    end
+
+    local damage, crit = entity:DealDamage()
+    damage = damage * skill:Get(AttributeType.AttackMultiplier)
+
+    if skill.projectile then
+        -- 远程：命中交给抛射物的collider裁决，这里只锁死这一发的伤害/暴击并发射
+        local isPlayer = utils.Contains(entity.tags, "player")
+        local record = {
+            faction = isPlayer and "enemy" or "player",
+            direction = entity.facing,
+            speed = skill.projectile.speed,
+            projectileId = skill.projectile.id,
+            onHit = function(target)
+                --- 与近战一致：飞行途中施法者或目标死了，这一发就作废，不再结算
+                if entity:IsDead() or target:IsDead() then return end
+                self:ResolveHit(DamageContext(entity, target, skill, damage, crit))
+            end
+        }
+        self.spawner:Spawn(entity.position, record)
+        return
+    end
+
+    -- 近战：目标当场选定，延迟到 skill.delay 后结算。
+    -- aoe 技能只锚定最近的一个目标（命中点），溅射在 ResolveHit 里以它为圆心展开，
+    -- 避免"选中即受伤"——远处的敌人不该在抛射物/挥击还没碰到他时就掉血
+    local selector = skill:Get(AttributeType.AoERange) > 0 and self.SelectOne or self.SelectGoal
+    local targets = selector(self, entity, skill)
+
+    -- aoe 技能的爆炸特效在发动时立刻播放（命中点用选定的锚定目标）
+    local aoeRange = skill:Get(AttributeType.AoERange) or 0
+    if aoeRange > 0 and #targets > 0 then
+        EventSystem:FireEvent(EventType.SkillAoeBurst, targets[1], targets[1].position, aoeRange, skill)
+    end
+
+    for _, target in ipairs(targets) do
+        local ctx = DamageContext(entity, target, skill, damage, crit)
+        table.insert(self.delayedAttacks, { ctx = ctx, time = CS.UnityEngine.Time.time + skill.delay })
+    end
+end
+
+
+
+
+
+---结算一次命中：近战（delayedAttacks到点）和远程（抛射物collider命中）共用这一个入口
+---@param ctx DamageContext
+function CombatManager:ResolveHit(ctx)
+    local source, target, skill = ctx.source, ctx.target, ctx.skill
+    local finalDamage = target:TakeDamage(ctx)
+    self.uiManager:PopDamageHUD(target, finalDamage, ctx.crit)
+    EventSystem:FireSkillHitEvent(target, source, skill)
+    if skill then
+        skill:OnHit(source, target, ctx)
+    end
+
+    -- 击退：未死亡且技能带击退属性才触发
+    if skill and not target:IsDead() then
+        local knockbackSpeed = skill:Get(AttributeType.KnockbackSpeed) or 0
+        local knockbackDistance = skill:Get(AttributeType.KnockbackDistance) or 0
+        if knockbackSpeed > 0 and knockbackDistance > 0 then
+            local direction = (target.position > source.position) and 1 or -1
+            target:ApplyKnockback(knockbackSpeed, knockbackDistance, direction)
+        end
+    end
+
+    -- 伤害回血（Lifesteal 属性驱动，每次命中触发）
+    local lifestealAttr = source.attributes and source.attributes[AttributeType.Lifesteal]
+    local lifestealRate = lifestealAttr and lifestealAttr:GetFinalValue() or 0
+    if lifestealRate > 0 and source.Heal then
+        source:Heal(finalDamage * lifestealRate)
+    end
+
+    if utils.Contains(target.tags, "enemy") and target:IsDead() then
+        local expRewardAttr = target.attributes[AttributeType.ExpReward]
+        local exp = expRewardAttr and math.ceil(expRewardAttr:GetFinalValue()) or 0
+        source:AddExp(exp)
+    end
+
+    -- 命中点溅射：以受击目标为圆心炸一次，周围敌人各吃一次。溅射命中的 ctx.aoeRange
+    -- 置 0，保证不会链式再炸，每个敌人严格只被结算一次。
+    -- aoe 爆炸特效已改在 UseSkill 发动时播放，这里只结算伤害。
+    local aoeRange = ctx.aoeRange or 0
+    if aoeRange > 0 and skill and utils.Contains(target.tags, "enemy") then
+        for _, enemy in ipairs(self.enemyManager:GetAll()) do
+            if enemy ~= target and not enemy:IsDead()
+                and math.abs(enemy.position - target.position) <= aoeRange then
+                self:ResolveHit(DamageContext(source, enemy, skill, ctx.rawAmount, ctx.crit, 0))
+            end
+        end
+    end
+end
+
+function CombatManager:OnUpdate()
+    for index = #self.delayedAttacks, 1, -1 do
+        local tbl = self.delayedAttacks[index]
+        if tbl.time < CS.UnityEngine.Time.time then
+            --- 到点才判死活：任一方已死则这一击作废。死亡是不可逆的，作废的条目必须一并移除，
+            --- 否则会永久留在队列里被每帧重扫
+            if not tbl.ctx.source:IsDead() and not tbl.ctx.target:IsDead() then
+                self:ResolveHit(tbl.ctx)
+            end
+            table.remove(self.delayedAttacks, index)
+        end
+    end
+end
+
+function CombatManager:Reset()
+    self.delayedAttacks = {}
+end
+
+---
+---@param entity Entity
+---@param skill Skill
+---@return boolean
+function CombatManager:HasGoal(entity, skill)
+    -- 纯功能技能（无抛射物且倍率为 0）不需要目标，直接可放
+    if not skill.projectile and skill:Get(AttributeType.AttackMultiplier) == 0 then
+        return true
+    end
+    return #self:SelectGoal(entity, skill) ~= 0
+end
+
+
+return CombatManager

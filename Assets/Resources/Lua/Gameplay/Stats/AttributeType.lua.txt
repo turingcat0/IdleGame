@@ -1,0 +1,20 @@
+---@enum AttributeType
+local AttributeType = {
+    MaxHealth = 1,
+    MaxMana = 2,
+    Attack = 3,
+    Defense = 4,
+    CritChance = 5,
+    CritDamage = 6,
+    Speed = 7,
+    AttackRange = 8,
+    AttackMultiplier = 9,
+    ManaCost = 10,
+    KnockbackSpeed = 11,
+    KnockbackDistance = 12,
+    Lifesteal = 13,
+    ExpReward = 14,
+    AoERange = 15
+}
+
+return AttributeType

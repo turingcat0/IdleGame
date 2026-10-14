@@ -1,0 +1,68 @@
+local GameManager = require("GameManager")
+
+---@type CS.UnityEngine.MonoBehaviour
+local self = self
+
+local StageState = require("Gameplay.StageState")
+
+local FadeOut = 0.4
+local FadeIn  = 0.4
+
+local fadeImage = nil
+local phase = "idle"   --- "fadeout" → "hold" → "fadein" → "idle"
+local el = 0           --- 当前阶段已过秒数
+local prevTransitioning = false
+
+function Start()
+    local fadeTf = self.transform:Find("Fade")
+    if fadeTf then
+        fadeImage = fadeTf:GetComponent(typeof(CS.UnityEngine.UI.Image))
+    end
+end
+
+function Update()
+    local lm = GameManager.levelManager
+    if not fadeImage then return end
+
+    local dt = CS.UnityEngine.Time.deltaTime
+    local isTransitioning = lm and (lm.state == StageState.Transitioning) or false
+
+    --- 边沿检测：进入 Transitioning → 开始 fade-out
+    if isTransitioning and not prevTransitioning then
+        phase = "fadeout"
+        el = 0
+    end
+    prevTransitioning = isTransitioning
+
+    local alpha = 0
+
+    if phase == "fadeout" then
+        el = el + dt
+        alpha = el / FadeOut
+        if el >= FadeOut then
+            alpha = 1
+            phase = "hold"
+            el = 0
+            if lm then lm:OnFadeMidpoint() end
+        end
+    elseif phase == "hold" then
+        alpha = 1
+        --- settlement 非 nil 则停住全黑等结算确认；nil 则开始 fade-in
+        if not lm or not lm.settlement then
+            phase = "fadein"
+            el = 0
+        end
+    elseif phase == "fadein" then
+        el = el + dt
+        alpha = math.max(0, 1 - el / FadeIn)
+        if el >= FadeIn then
+            alpha = 0
+            phase = "idle"
+            el = 0
+            if lm then lm:OnFadeComplete() end
+        end
+    --- phase == "idle" → alpha = 0
+    end
+
+    fadeImage.color = CS.UnityEngine.Color(0, 0, 0, math.max(0, math.min(1, alpha)))
+end

@@ -1,0 +1,29 @@
+local Skill = require("Gameplay.Skills.Skill")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+local EffectTypes = require("Config.Generated.EffectTypes")
+local EffectFactory = require("Gameplay.Effects.EffectFactory")
+
+---@class StormRush : Skill
+---风暴：释放时给自己加攻击（80%攻击力，8秒），命中时眩晕目标（2秒）
+local StormRush = Skill:extend()
+
+---@param source Entity
+---@param target Entity?
+function StormRush:OnCast(source, target)
+    local attackAttr = source.attributes and source.attributes[AttributeType.Attack]
+    local attack = attackAttr and attackAttr:GetFinalValue() or 100
+    local value = attack * 0.8
+    local instance = EffectFactory.CreateInstance(EffectTypes.attack_up, source, source, 8, { value = value })
+    source:AddEffect(instance)
+end
+
+---@param source Entity
+---@param target Entity
+---@param ctx DamageContext
+function StormRush:OnHit(source, target, ctx)
+    if not target then return end
+    local instance = EffectFactory.CreateInstance(EffectTypes.stun, target, source, 2)
+    target:AddEffect(instance)
+end
+
+return StormRush

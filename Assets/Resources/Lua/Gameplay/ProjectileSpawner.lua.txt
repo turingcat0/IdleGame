@@ -1,0 +1,56 @@
+local Object = require("Utils.classic")
+
+---@class ProjectileSpawner
+---@field prefabs table<string, CS.UnityEngine.GameObject>  projectileId → prefab，懒加载缓存
+---@field root CS.UnityEngine.Transform
+---@field maxRange number 飞行超过这个距离就自销（"飞出一个地方就消失"）
+---@field projectileY number 抛射物所在的世界Y，横板单轴游戏里战斗都在同一条Y带上，按场景微调
+local ProjectileSpawner = Object:extend()
+
+function ProjectileSpawner:New()
+    self.prefabs = {}
+    local rootGo = CS.UnityEngine.GameObject.Find("Projectiles")
+    self.root = rootGo and rootGo.transform or nil
+    self.maxRange = 30
+    self.projectileY = -21.5
+end
+
+---发射一枚抛射物。命中判定完全交给抛射物自身的 collider，这里只负责按 record.projectileId
+---加载对应 prefab 并把 record 注入过去。prefab 路径约定：Prefabs/Projectiles/<id>
+---（id 即路径段，同 EnemySpawner 的 AnimatorControllers/<enemy.id>）。
+---@param originX number 发射点的x坐标
+---@param record table {source, damage, crit, faction, direction, speed, projectileId, onHit}
+function ProjectileSpawner:Spawn(originX, record)
+    local prefab = self.prefabs[record.projectileId]
+    if not prefab then
+        prefab = CS.UnityEngine.Resources.Load("Prefabs/Projectiles/"..record.projectileId, typeof(CS.UnityEngine.GameObject))
+        self.prefabs[record.projectileId] = prefab
+    end
+
+    ---@type CS.UnityEngine.GameObject
+    local go = CS.UnityEngine.Object.Instantiate(prefab, self.root)
+    local y = self.projectileY
+    local lm = require("GameManager").levelManager
+    if lm and lm.logicScene and lm.logicScene.spawnY then
+        y = lm.logicScene.spawnY - 0.5
+    end
+    go.transform.position = CS.UnityEngine.Vector3(originX, y, 0)
+
+    ---@type CS.LuaBehaviour
+    local lb = go:GetComponent(typeof(CS.LuaBehaviour))
+    lb.scriptEnv.Init(record, self.maxRange)
+end
+
+---清空所有在飞抛射物：销毁 root 下全部子物体（玩家死亡 / 重置场地时调用）
+function ProjectileSpawner:Clear()
+    if not self.root then return end
+    local toDestroy = {}
+    for i = 0, self.root.childCount - 1 do
+        toDestroy[#toDestroy + 1] = self.root:GetChild(i).gameObject
+    end
+    for _, go in ipairs(toDestroy) do
+        CS.UnityEngine.Object.Destroy(go)
+    end
+end
+
+return ProjectileSpawner

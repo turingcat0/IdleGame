@@ -1,0 +1,32 @@
+local GameManager = require "GameManager"
+local EventSystem = require "Event.EventSystem"
+local AttributeType = require "Gameplay.Stats.AttributeType"
+---@type CS.TMPro.TMP_Text
+local power
+local player
+
+function Start()
+    power = self.transform:Find("Background/Background1/Power/Power"):GetComponent(typeof(CS.TMPro.TMP_Text))
+    player = GameManager.player
+    EventSystem:RegisterAttributeChangedListener(player, AttributeType.MaxHealth, nil, OnPlayerStateChanged)
+    EventSystem:RegisterAttributeChangedListener(player, AttributeType.MaxMana, nil, OnPlayerStateChanged)
+    EventSystem:RegisterAttributeChangedListener(player, AttributeType.Attack, nil, OnPlayerStateChanged)
+    EventSystem:RegisterAttributeChangedListener(player, AttributeType.Defense, nil, OnPlayerStateChanged)
+    EventSystem:RegisterAttributeChangedListener(player, AttributeType.CritChance, nil, OnPlayerStateChanged)
+    EventSystem:RegisterAttributeChangedListener(player, AttributeType.CritDamage, nil, OnPlayerStateChanged)
+    OnPlayerStateChanged()
+end
+
+function OnDestroy()
+    EventSystem:RemoveAttributeChangedListener(player, AttributeType.MaxHealth, nil, OnPlayerStateChanged)
+    EventSystem:RemoveAttributeChangedListener(player, AttributeType.MaxMana, nil, OnPlayerStateChanged)
+    EventSystem:RemoveAttributeChangedListener(player, AttributeType.Attack, nil, OnPlayerStateChanged)
+    EventSystem:RemoveAttributeChangedListener(player, AttributeType.Defense, nil, OnPlayerStateChanged)
+    EventSystem:RemoveAttributeChangedListener(player, AttributeType.CritChance, nil, OnPlayerStateChanged)
+    EventSystem:RemoveAttributeChangedListener(player, AttributeType.CritDamage, nil, OnPlayerStateChanged)
+end
+
+
+function OnPlayerStateChanged()
+    power:SetText(tostring(math.ceil(player:GetPower())))
+end

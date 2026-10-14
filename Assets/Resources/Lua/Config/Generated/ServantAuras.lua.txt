@@ -1,0 +1,59 @@
+local ServantAuras = {
+
+    ["guard_aura"] = {
+        name = "钢铁壁垒",
+        mods = {
+            { attribute = 4, modifierType = 2, value = 0.25 },  -- 防御 +25%
+            { attribute = 1, modifierType = 2, value = 0.20 },  -- 生命上限 +20%
+        },
+    },
+    ["ranger_aura"] = {
+        name = "疾风指引",
+        mods = {
+            { attribute = 5, modifierType = 2, value = 1.00 },  -- 暴击率 +100%（5% → 10%）
+            { attribute = 7, modifierType = 2, value = 0.20 },  -- 速度 +20%
+        },
+    },
+    ["crusher_aura"] = {
+        name = "碎骨怒吼",
+        mods = {
+            { attribute = 3, modifierType = 2, value = 0.25 },  -- 攻击 +25%
+            { attribute = 6, modifierType = 2, value = 0.30 },  -- 暴击伤害 +30%
+        },
+    },
+    ["mage_aura"] = {
+        name = "法术专注",
+        mods = {
+            { attribute = 3, modifierType = 2, value = 0.25 },  -- 攻击 +25%
+            { attribute = 2, modifierType = 2, value = 0.20 },  -- 法力上限 +20%
+        },
+    },
+    ["cleric_aura"] = {
+        name = "生命祝福",
+        mods = {
+            { attribute = 1, modifierType = 2, value = 0.20 },  -- 生命上限 +20%
+            { attribute = 2, modifierType = 2, value = 0.20 },  -- 法力上限 +20%
+        },
+    },
+    ["berserker_aura"] = {
+        name = "狂怒",
+        mods = {
+            { attribute = 6, modifierType = 2, value = 0.50 },  -- 暴击伤害 +50%
+        },
+    },
+    ["rogue_aura"] = {
+        name = "暗影",
+        mods = {
+            { attribute = 5, modifierType = 2, value = 1.00 },  -- 暴击率 +100%（5% → 10%）
+        },
+    },
+    ["paladin_aura"] = {
+        name = "圣盾",
+        mods = {
+            { attribute = 4, modifierType = 2, value = 0.20 },  -- 防御 +20%
+            { attribute = 1, modifierType = 2, value = 0.15 },  -- 生命上限 +15%
+        },
+    },
+}
+
+return ServantAuras

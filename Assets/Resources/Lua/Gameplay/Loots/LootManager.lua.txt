@@ -1,0 +1,78 @@
+local Object = require("Utils.classic")
+
+local Rarity        = require("Gameplay.Items.Rarity")
+local EquipmentSlot = require("Gameplay.Items.EquipmentSlot")
+local ItemInstance  = require("Gameplay.Items.ItemInstance")
+local Items         = require("Gameplay.Items.Items")
+local EventSystem   = require("Event.EventSystem")
+local EventType     = require("Event.EventType")
+
+local LootManager = Object:extend()
+
+
+function LootManager:New()
+    EventSystem:RegisterListener(EventType.EntityDied, nil, self, LootManager.OnEntityDied)
+    --- 默认掉落概率，当敌人配置未指定时回落
+    self.defaultDropRate = 0.3
+    --- 每 10 级提升一档品质
+    self.levelsPerQuality = 10
+end
+
+---@param monsterLevel integer
+---@param rarityBonus integer? 掉落品质等级加成
+function LootManager:RandomDropQuality(monsterLevel, rarityBonus)
+    local effectiveLevel = monsterLevel + (rarityBonus or 0)
+    local value = (effectiveLevel - 1) / self.levelsPerQuality
+    local quality = math.floor(value) + 1
+    local upgradeChance = value - math.floor(value)
+
+    if math.random() < upgradeChance then
+        quality = quality + 1
+    end
+
+    return math.min(quality, Rarity.Mythic)
+end
+
+function LootManager:RandomDropSlot()
+    local slot = math.random(1, EquipmentSlot.Necklace)
+    return slot
+end
+
+---
+---@param rarity Rarity
+function LootManager:RandomItemOfRarity(rarity)
+    local items = Items.rarityItemMap[rarity]
+    local index = math.random(1, #items)
+    return items[index]
+end
+
+function LootManager:RandomDropLevel(level, rarity)
+    return math.random(math.max(level - rarity * 10, 1), level)
+end
+
+
+
+---
+---@param entity Entity
+function LootManager:OnEntityDied(entity)
+    local EnemyInstance = require("Gameplay.Entities.EnemyInstance")
+    if entity:is(EnemyInstance) then
+        ---@cast entity EnemyInstance
+        local dropRate = entity.enemy.dropRate or self.defaultDropRate
+        if math.random() < dropRate then
+            local level = entity.level
+            local rarityBonus = entity.enemy.dropRarityBonus or 0
+            local rarity = self:RandomDropQuality(level, rarityBonus)
+            local item = self:RandomItemOfRarity(rarity)
+            local itemLevel = self:RandomDropLevel(level, rarity)
+
+            local itemStack = ItemInstance(item, itemLevel)
+            local GameManager = require("GameManager")
+            GameManager.uiManager:DropItem(itemStack, entity)
+        end
+    end
+end
+
+
+
+return LootManager

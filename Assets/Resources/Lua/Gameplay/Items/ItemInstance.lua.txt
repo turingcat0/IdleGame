@@ -1,0 +1,62 @@
+local Object = require("Utils.classic")
+local EquipmentEffect = require("Gameplay.Items.EquipmentEffect")
+local utils           = require("Utils.utils")
+local PowerCalculator = require("Gameplay.Stats.PowerCalculator")
+local BalanceConfig   = require("Gameplay.Stats.BalanceConfig")
+
+local function GenerateUUID()
+    local template = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx"
+    return string.gsub(template, "[xy]", function(c)
+        local v = (c == "x") and math.random(0, 15) or math.random(8, 11)
+        return string.format("%x", v)
+    end)
+end
+
+---@class ItemInstance 物品实例类
+---@field item Item
+---@field level integer
+---@field uuid string 每个实例唯一的标识符
+---@field equipmentEffect EquipmentEffect
+local ItemInstance = Object:extend()
+
+---
+---@param item Item
+---@param level integer
+function ItemInstance:New(item, level)
+    self.item = item
+    self.level = level
+    self.uuid = GenerateUUID()
+    --物品实例直接从物品原型把装备效果复制过来，因为我们希望不同物品的等级会影响属性，然而我们不能直接去改物品原型的属性
+    self.equipmentEffect = utils.DeepCopy(item.equipmentEffect)
+    --这个游戏里的装备等级
+    self:ApplyLevelToAttributes(level)
+end
+
+---计算下等级对于属性的影响
+---@param level integer
+function ItemInstance:ApplyLevelToAttributes(level)
+    -- 由 BalanceConfig 统一根据槽位、稀有度、等级计算，避免 CSV 数值失控
+    BalanceConfig.ApplyItemStats(self, level)
+end
+
+---当被穿上时调用
+function ItemInstance:OnEquipped()
+    self.equipmentEffect:OnEffectAdded()
+end
+
+function ItemInstance:OnUnequipped()
+    self.equipmentEffect:OnRemoved()
+end
+
+---计算装备实例的战力
+---@return number
+function ItemInstance:GetPower()
+    return PowerCalculator.Calculate(self.equipmentEffect.attributes)
+end
+
+function ItemInstance:Dismantle()
+    --这里先简单写一下 后面弄个配置表啥的
+    return self.item.rarity * 10
+end
+
+return ItemInstance

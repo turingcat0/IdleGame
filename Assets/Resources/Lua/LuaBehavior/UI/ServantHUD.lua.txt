@@ -1,0 +1,249 @@
+local AttributeType = require("Gameplay.Stats.AttributeType")
+local BuffBarView  = require("Gameplay.Visuals.BuffBarView")
+local EventSystem  = require("Event.EventSystem")
+local EventType    = require("Event.EventType")
+
+---@type CS.UnityEngine.MonoBehaviour
+local self = self
+
+--- 说明：Prefabs/ServantHUD 这个 prefab 现在被当作“单张随从卡片”的视觉模板，
+--- 运行时由本脚本动态实例化 3 份，分别挂到场景里 ServantHUD/Card1..3 下。
+--- 因此场景里只需要保留空的 Card1/Card2/Card3 容器即可。
+local cardPrefab = nil
+local buffIconPrefab = nil
+local cards = {}
+
+local MAIN_SLOT_COUNT = 3
+
+---@param transform CS.UnityEngine.Transform
+---@param path string
+---@return CS.UnityEngine.Transform?
+local function SafeFind(transform, path)
+    local obj = transform:Find(path)
+    if not obj then
+        print(string.format("[ServantHUD] 找不到节点: %s", path))
+    end
+    return obj
+end
+
+---@param transform CS.UnityEngine.Transform
+---@param path string
+---@param expectedType System.Type
+---@return any
+local function SafeGetComponent(transform, path, expectedType)
+    local obj = transform:Find(path)
+    if not obj then
+        print(string.format("[ServantHUD] 找不到节点: %s", path))
+        return nil
+    end
+    local comp = obj:GetComponent(expectedType)
+    if not comp then
+        print(string.format("[ServantHUD] 节点 %s 缺少组件: %s", path, tostring(expectedType)))
+    end
+    return comp
+end
+
+---@param cardRoot CS.UnityEngine.Transform
+---@return table?
+local function BuildCard(cardRoot)
+    if not cardPrefab then
+        print("[ServantHUD] 未加载随从卡片 prefab")
+        return nil
+    end
+
+    local go = CS.UnityEngine.Object.Instantiate(cardPrefab, cardRoot)
+    go.name = "ServantCard"
+    go.transform.localPosition = CS.UnityEngine.Vector3.zero
+    go.transform.localScale = CS.UnityEngine.Vector3.one
+
+    local card = {
+        root           = go,
+        portrait       = SafeGetComponent(go.transform, "Image", typeof(CS.UnityEngine.UI.Image)),
+        nameText       = SafeGetComponent(go.transform, "Name", typeof(CS.TMPro.TMP_Text)),
+        levelText      = SafeGetComponent(go.transform, "LevelParent/LevelText", typeof(CS.TMPro.TMP_Text)),
+        hpFill         = SafeGetComponent(go.transform, "HealthBar/Health", typeof(CS.UnityEngine.UI.Image)),
+        hpText         = SafeGetComponent(go.transform, "HealthBar/HealthText", typeof(CS.TMPro.TMP_Text)),
+        manaFill       = SafeGetComponent(go.transform, "ManaBar/Mana", typeof(CS.UnityEngine.UI.Image)),
+        manaText       = SafeGetComponent(go.transform, "ManaBar/ManaText", typeof(CS.TMPro.TMP_Text)),
+        buffContainer  = SafeFind(go.transform, "Buffs"),
+        buffBar        = nil,
+        currentInstance = nil,
+    }
+
+    if not card.buffContainer then
+        local buffsGo = CS.UnityEngine.GameObject("Buffs", typeof(CS.UnityEngine.RectTransform))
+        buffsGo.transform:SetParent(go.transform, false)
+        card.buffContainer = buffsGo.transform
+    end
+
+    --- 强制血条/蓝条为 Filled 类型，避免 prefab 里忘记设置导致 fillAmount 无效
+    if card.hpFill then
+        card.hpFill.type = CS.UnityEngine.UI.Image.Type.Filled
+        card.hpFill.fillMethod = CS.UnityEngine.UI.Image.FillMethod.Horizontal
+        card.hpFill.fillOrigin = 0
+    end
+    if card.manaFill then
+        card.manaFill.type = CS.UnityEngine.UI.Image.Type.Filled
+        card.manaFill.fillMethod = CS.UnityEngine.UI.Image.FillMethod.Horizontal
+        card.manaFill.fillOrigin = 0
+    end
+
+    return card
+end
+
+---@param card table
+---@param servantInstance ServantInstance
+local function ShowCard(card, servantInstance)
+    if card.currentInstance ~= servantInstance then
+        if card.buffBar then
+            card.buffBar:Dispose()
+            card.buffBar = nil
+        end
+        card.currentInstance = servantInstance
+
+        local sprite = CS.UnityEngine.Resources.Load(
+            "Textures/" .. servantInstance.servant.id, typeof(CS.UnityEngine.Sprite))
+        if card.portrait then
+            if sprite then
+                card.portrait.sprite = sprite
+                card.portrait.enabled = true
+            else
+                card.portrait.enabled = false
+            end
+            card.portrait.color = CS.UnityEngine.Color(1, 1, 1, 1)
+        end
+
+        if card.nameText then
+            card.nameText.text = servantInstance.servant.name or ""
+        end
+
+        if buffIconPrefab and card.buffContainer then
+            card.buffBar = BuffBarView(card.buffContainer, buffIconPrefab, servantInstance)
+        end
+
+        card.root:SetActive(true)
+    end
+
+    local maxHP = servantInstance.attributes[AttributeType.MaxHealth]:GetFinalValue()
+    if maxHP > 0 and card.hpFill then
+        local ratio = math.max(0, servantInstance.health / maxHP)
+        card.hpFill.fillAmount = ratio
+    end
+    if card.hpText then
+        card.hpText.text = string.format("%d/%d", math.ceil(servantInstance.health), math.ceil(maxHP))
+    end
+
+    local maxMP = servantInstance.attributes[AttributeType.MaxMana]:GetFinalValue()
+    if maxMP > 0 and card.manaFill then
+        local ratio = math.max(0, servantInstance.mana / maxMP)
+        card.manaFill.fillAmount = ratio
+    end
+    if card.manaText then
+        card.manaText.text = string.format("%d/%d", math.ceil(servantInstance.mana), math.ceil(maxMP))
+    end
+
+    if card.levelText then
+        card.levelText.text = tostring(servantInstance.level)
+    end
+
+    if card.buffBar then card.buffBar:OnUpdate() end
+end
+
+---@param card table
+local function HideCard(card)
+    if card.buffBar then
+        card.buffBar:Dispose()
+        card.buffBar = nil
+    end
+    card.currentInstance = nil
+    card.root:SetActive(false)
+end
+
+---关卡/波次切换时清空旧卡片，避免上一轮的死亡/0 血状态残留到开局
+local function ClearAllCards()
+    for i = 1, MAIN_SLOT_COUNT do
+        local card = cards[i]
+        if card then
+            HideCard(card)
+        end
+    end
+end
+
+---@param card table
+local function ShowDeadCard(card)
+    --- 随从死亡：不隐藏卡片，肖像置灰 + 血条清零
+    if card.portrait then
+        card.portrait.color = CS.UnityEngine.Color(0.3, 0.3, 0.3, 1)
+    end
+    if card.hpFill then
+        card.hpFill.fillAmount = 0
+    end
+    if card.hpText then
+        card.hpText.text = "0/0"
+    end
+    if card.buffBar then
+        card.buffBar:Dispose()
+        card.buffBar = nil
+    end
+end
+
+function Start()
+    cardPrefab = CS.UnityEngine.Resources.Load("Prefabs/ServantHUD", typeof(CS.UnityEngine.GameObject))
+    if not cardPrefab then
+        print("[ServantHUD] 找不到 Prefabs/ServantHUD")
+        return
+    end
+
+    buffIconPrefab = CS.UnityEngine.Resources.Load("Prefabs/Buffs/BuffIcon", typeof(CS.UnityEngine.GameObject))
+
+    for i = 1, MAIN_SLOT_COUNT do
+        local cardRoot = SafeFind(self.transform, "Card" .. i)
+        if cardRoot then
+            cards[i] = BuildCard(cardRoot)
+            if cards[i] then
+                cards[i].root:SetActive(false)
+            end
+        else
+            cards[i] = nil
+        end
+    end
+
+    EventSystem:RegisterListener(EventType.ServantManagerReset, nil, self, ClearAllCards)
+end
+
+function Update()
+    if not cards[1] then return end
+
+    local GameManager = require("GameManager")
+    local servantManager = GameManager.levelManager.servantManager
+    if not servantManager then return end
+
+    local servants = servantManager:GetAll()
+
+    local slotMap = {}
+    for _, s in ipairs(servants) do
+        slotMap[s.slotIndex] = s
+    end
+
+    for i = 1, MAIN_SLOT_COUNT do
+        local card = cards[i]
+        if not card then break end
+        local servant = slotMap[i]
+        if servant and not servant:IsDead() then
+            ShowCard(card, servant)
+        elseif card.currentInstance and card.currentInstance:IsDead() then
+            ShowDeadCard(card)
+        elseif card.currentInstance then
+            HideCard(card)
+        end
+    end
+end
+
+function OnDestroy()
+    EventSystem:RemoveListener(EventType.ServantManagerReset, nil, self, ClearAllCards)
+    for i = 1, MAIN_SLOT_COUNT do
+        if cards[i] and cards[i].buffBar then
+            cards[i].buffBar:Dispose()
+        end
+    end
+end

@@ -1,0 +1,48 @@
+local Object = require("Utils.classic")
+local BalanceConfig = require("Gameplay.Stats.BalanceConfig")
+
+---@class Servant 随从原型（配置层）。上场后的战斗实体是 ServantInstance
+---@field id string
+---@field name string
+---@field attributes table<AttributeType, Attribute>
+---@field normalSkill Skill 回蓝普攻
+---@field combatSkill Skill 耗蓝主动技
+---@field passiveId string? 被动效果 id，上场时作为永久效果挂在自己身上
+---@field auraId string? 光环 id，主随从满额生效、副随从打折生效
+---@field maxLevel integer 等级上限
+---@field growth table<AttributeType, number> 每级成长系数
+---@field upgradeBaseCost integer 升级基础消耗（金币）
+local Servant = Object:extend()
+
+---@param id string
+---@param name string
+---@param attributes table<AttributeType, Attribute>
+---@param normalSkill Skill
+---@param combatSkill Skill
+---@param passiveId string?
+---@param auraId string?
+---@param maxLevel integer?
+---@param growth table<AttributeType, number>?
+---@param upgradeBaseCost integer?
+function Servant:New(id, name, attributes, normalSkill, combatSkill, passiveId, auraId, maxLevel, growth, upgradeBaseCost)
+    self.id = id
+    self.name = name
+    self.attributes = attributes
+    self.normalSkill = normalSkill
+    self.combatSkill = combatSkill
+    self.passiveId = passiveId
+    self.auraId = auraId
+    self.maxLevel = maxLevel or 10
+    self.growth = growth or {}
+    self.upgradeBaseCost = upgradeBaseCost or 100
+end
+
+---计算指定等级下各属性的基础值
+---@param level integer
+---@return table<AttributeType, number> 属性基础值表
+function Servant:GetBaseStatsAtLevel(level)
+    -- 由 BalanceConfig 根据“仆从等级 S 对应玩家等级 S*10”的规则统一计算
+    return BalanceConfig.GetServantBaseStats(self.id, level)
+end
+
+return Servant

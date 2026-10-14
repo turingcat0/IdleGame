@@ -1,0 +1,73 @@
+local EquipmentEffect = require("Gameplay.Items.EquipmentEffect")
+local Attribute       = require("Gameplay.Stats.Attribute")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+local Item          = require("Gameplay.Items.Item")
+local EquipmentSet  = require("Gameplay.Items.EquipmentSet")
+local EquipmentSlot = require("Gameplay.Items.EquipmentSlot")
+local Rarity      = require("Gameplay.Items.Rarity")
+local EquipmentSets = require("Gameplay.Items.EquipmentSets")
+local ItemConfigs = require("Config.Generated.Items")
+---@class Items
+local Items = {
+    items = {},
+    rarityItemMap = {}
+}
+
+---
+---@param id string
+---@param name string
+---@param equipmentSlot EquipmentSlot
+---@param rarity Rarity
+---@param tags string
+---@param maxHealth integer
+---@param maxMana integer
+---@param attack integer
+---@param defense integer
+---@param critChance number
+---@param critDamage number
+---@param speed number
+---@param effectId string
+---@param equipmentSetId string
+---@return Item
+function Items:Register(id, name, equipmentSlot, rarity, tags, maxHealth, maxMana, attack, defense, critChance, critDamage, speed, effectId, equipmentSetId)
+    local attributes = {}
+    attributes[AttributeType.MaxHealth] = Attribute(maxHealth)
+    attributes[AttributeType.MaxMana] = Attribute(maxMana)
+    attributes[AttributeType.Attack] = Attribute(attack)
+    attributes[AttributeType.Defense] = Attribute(defense)
+    attributes[AttributeType.CritChance] = Attribute(critChance)
+    attributes[AttributeType.CritDamage] = Attribute(critDamage)
+    attributes[AttributeType.Speed] = Attribute(speed)
+
+    local equipmentEffect = EquipmentEffect(id, attributes, nil) --Effect之后会用类似的东西获取
+    local equipmentSet = EquipmentSets:Get(equipmentSetId)
+    local item = Item(id, name, equipmentSlot, rarity, tags, equipmentEffect, equipmentSet)
+    self.items[id] = item
+    table.insert(self.rarityItemMap[rarity], item)
+    return item
+end
+
+for i = 1, Rarity.Mythic do
+    Items.rarityItemMap[i] = {}
+end
+
+for id, config in pairs(ItemConfigs) do
+    Items[id] = Items:Register(
+        id,
+        config.name,
+        EquipmentSlot[config.equipmentSlot],
+        Rarity[config.rarity],
+        config.tags,
+        config.maxHealth,
+        config.maxMana,
+        config.attack,
+        config.defense,
+        config.critChance,
+        config.critDamage,
+        config.speed,
+        config.effectId,
+        config.equipmentSetId
+    )
+end
+
+return Items

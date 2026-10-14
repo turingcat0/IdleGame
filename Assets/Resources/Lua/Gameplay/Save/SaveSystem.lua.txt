@@ -1,0 +1,152 @@
+local json = require("Utils.json")
+local SaveMigration = require("Gameplay.Save.SaveMigration")
+
+---@class SaveSystem 存档系统协调器
+---负责注册各模块、收集存档数据、应用存档数据、读写磁盘
+local SaveSystem = {
+    ---当前存档格式版本
+    VERSION = 1,
+    ---@type table<string, SaveModule>
+    modules = {},
+    ---@type string[] 注册顺序，Collect / Apply 按此顺序执行
+    moduleOrder = {}
+}
+
+---注册一个存档模块
+---@param name string 模块名，也是存档中的 section key
+---@param module SaveModule 包含 Collect / Apply / Default 的模块
+function SaveSystem.RegisterModule(name, module)
+    if not SaveSystem.modules[name] then
+        table.insert(SaveSystem.moduleOrder, name)
+    end
+    SaveSystem.modules[name] = module
+end
+
+---注销一个存档模块
+---@param name string
+function SaveSystem.UnregisterModule(name)
+    if SaveSystem.modules[name] then
+        for i, n in ipairs(SaveSystem.moduleOrder) do
+            if n == name then
+                table.remove(SaveSystem.moduleOrder, i)
+                break
+            end
+        end
+    end
+    SaveSystem.modules[name] = nil
+end
+
+---从 context 收集所有模块的数据
+---@param context table 包含 player / gameManager / world 等上下文
+---@return table
+function SaveSystem.Collect(context)
+    local data = {
+        version = SaveSystem.VERSION,
+        timestamp = os.time()
+    }
+
+    for _, name in ipairs(SaveSystem.moduleOrder) do
+        local module = SaveSystem.modules[name]
+        local ok, section = pcall(module.Collect, context)
+        if ok then
+            data[name] = section
+        else
+            error(string.format("[SaveSystem] Collect failed for module '%s': %s", name, tostring(section)))
+        end
+    end
+
+    return data
+end
+
+---将收集到的数据编码为 JSON
+---@param context table
+---@return string json
+function SaveSystem.Encode(context)
+    local data = SaveSystem.Collect(context)
+    return json.encode(data)
+end
+
+---保存到磁盘
+---@param context table
+function SaveSystem.Save(context)
+    local CS = CS
+    local jsonStr = SaveSystem.Encode(context)
+
+    -- 先备份旧存档
+    if CS.xluaDemo.SaveManager.HasSave() then
+        CS.xluaDemo.SaveManager.WriteBackup()
+    end
+
+    CS.xluaDemo.SaveManager.Write(jsonStr)
+end
+
+---从磁盘读取原始 JSON 字符串
+---@return string? json
+function SaveSystem.ReadRaw()
+    return CS.xluaDemo.SaveManager.Read()
+end
+
+---从磁盘读取并解码为 Lua table
+---@return table? data
+function SaveSystem.LoadRaw()
+    local jsonStr = SaveSystem.ReadRaw()
+    if not jsonStr then
+        return nil
+    end
+
+    local ok, data = pcall(json.decode, jsonStr)
+    if not ok then
+        error("[SaveSystem] Failed to decode save json: " .. tostring(data))
+    end
+
+    return data
+end
+
+---将存档数据应用到 context
+---会先执行迁移，再依次调用各模块的 Apply
+---@param context table
+---@param data table
+function SaveSystem.Apply(context, data)
+    data = SaveMigration.Migrate(data, SaveSystem.VERSION)
+
+    for _, name in ipairs(SaveSystem.moduleOrder) do
+        local module = SaveSystem.modules[name]
+        local section = data[name]
+        if section == nil and module.Default then
+            section = module.Default()
+        end
+
+        if section ~= nil then
+            local ok, err = pcall(module.Apply, context, section)
+            if not ok then
+                error(string.format("[SaveSystem] Apply failed for module '%s': %s", name, tostring(err)))
+            end
+        end
+    end
+end
+
+---从磁盘加载并直接应用到 context
+---@param context table
+---@return boolean success
+function SaveSystem.Load(context)
+    local data = SaveSystem.LoadRaw()
+    if not data then
+        return false
+    end
+
+    SaveSystem.Apply(context, data)
+    return true
+end
+
+---检查是否存在存档
+---@return boolean
+function SaveSystem.HasSave()
+    return CS.xluaDemo.SaveManager.HasSave()
+end
+
+---删除存档
+function SaveSystem.Delete()
+    CS.xluaDemo.SaveManager.Delete()
+end
+
+return SaveSystem

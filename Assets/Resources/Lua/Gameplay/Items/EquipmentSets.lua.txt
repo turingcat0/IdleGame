@@ -1,0 +1,89 @@
+local EquipmentSet = require("Gameplay.Items.EquipmentSet")
+local EquipmentEffect = require("Gameplay.Items.EquipmentEffect")
+
+local EquipmentSets = {
+    equipmentSets = {}
+}
+
+---注册套装
+---@param id string
+---@param name string
+---@param twoPieceBonus EquipmentEffect
+---@param fourPieceBonus EquipmentEffect
+---@param sixPieceBonus EquipmentEffect
+---@return EquipmentSet
+function EquipmentSets:Register(id, name, twoPieceBonus, fourPieceBonus, sixPieceBonus)
+    local set = EquipmentSet(id, name, twoPieceBonus, fourPieceBonus, sixPieceBonus)
+    self.equipmentSets[id] = set
+    return set
+end
+
+---
+---@param id string
+---@return EquipmentSet
+function EquipmentSets:Get(id)
+    return self.equipmentSets[id]
+end
+
+EquipmentSets.IronSet = EquipmentSets:Register("iron_set", "铁壁套装",
+                EquipmentEffect.Create("iron_set_two", 10, 2, 5, 30, 0.05, 0.10, 0, nil),
+                EquipmentEffect.Create("iron_set_four", 20, 4, 10, 60, 0.10, 0.20, 0, nil),
+                EquipmentEffect.Create("iron_set_six", 40, 8, 20, 120, 0.20, 0.40, 0, nil))
+
+EquipmentSets.HunterSet = EquipmentSets:Register("hunter_set", "猎风套装",
+                EquipmentEffect.Create("hunter_set_two", 15, 4, 8, 40, 0.06, 0.15, 0, nil),
+                EquipmentEffect.Create("hunter_set_four", 30, 8, 16, 80, 0.12, 0.30, 0, nil),
+                EquipmentEffect.Create("hunter_set_six", 60, 16, 32, 160, 0.22, 0.50, 0, nil))
+
+EquipmentSets.StarlightSet = EquipmentSets:Register("starlight_set", "星辉套装",
+                EquipmentEffect.Create("starlight_set_two", 25, 8, 12, 55, 0.07, 0.20, 0, nil),
+                EquipmentEffect.Create("starlight_set_four", 50, 16, 24, 110, 0.14, 0.40, 0, nil),
+                EquipmentEffect.Create("starlight_set_six", 100, 32, 48, 220, 0.24, 0.65, 0, nil))
+
+EquipmentSets.EmberSet = EquipmentSets:Register("ember_set", "烬炎套装",
+                EquipmentEffect.Create("ember_set_two", 40, 12, 18, 75, 0.08, 0.25, 0, nil),
+                EquipmentEffect.Create("ember_set_four", 80, 24, 36, 150, 0.16, 0.50, 0, nil),
+                EquipmentEffect.Create("ember_set_six", 160, 48, 72, 300, 0.26, 0.80, 0, nil))
+
+EquipmentSets.AbyssSet = EquipmentSets:Register("abyss_set", "深渊套装",
+                EquipmentEffect.Create("abyss_set_two", 60, 20, 28, 100, 0.10, 0.35, 0, nil),
+                EquipmentEffect.Create("abyss_set_four", 120, 40, 56, 200, 0.18, 0.70, 0, nil),
+                EquipmentEffect.Create("abyss_set_six", 240, 80, 112, 400, 0.28, 1.00, 0, nil))
+
+EquipmentSets.SkySet = EquipmentSets:Register("sky_set", "天穹套装",
+                EquipmentEffect.Create("sky_set_two", 90, 30, 40, 140, 0.12, 0.50, 0, nil),
+                EquipmentEffect.Create("sky_set_four", 180, 60, 80, 280, 0.20, 1.00, 0, nil),
+                EquipmentEffect.Create("sky_set_six", 360, 120, 160, 560, 0.30, 1.50, 0, nil))
+
+-- 旧稀有度套装占位：无额外套装效果，仅保证装备解析时 equipmentSet 不为 nil
+EquipmentSets.CommonSet = EquipmentSets:Register("common_set", "普通套装",
+                EquipmentEffect.Create("common_set_two", 0, 0, 0, 0, 0, 0, 0, nil),
+                EquipmentEffect.Create("common_set_four", 0, 0, 0, 0, 0, 0, 0, nil),
+                EquipmentEffect.Create("common_set_six", 0, 0, 0, 0, 0, 0, 0, nil))
+
+EquipmentSets.UncommonSet = EquipmentSets:Register("uncommon_set", "优秀套装",
+                EquipmentEffect.Create("uncommon_set_two", 0, 0, 0, 0, 0, 0, 0, nil),
+                EquipmentEffect.Create("uncommon_set_four", 0, 0, 0, 0, 0, 0, 0, nil),
+                EquipmentEffect.Create("uncommon_set_six", 0, 0, 0, 0, 0, 0, 0, nil))
+
+EquipmentSets.RareSet = EquipmentSets:Register("rare_set", "稀有套装",
+                EquipmentEffect.Create("rare_set_two", 0, 0, 0, 0, 0, 0, 0, nil),
+                EquipmentEffect.Create("rare_set_four", 0, 0, 0, 0, 0, 0, 0, nil),
+                EquipmentEffect.Create("rare_set_six", 0, 0, 0, 0, 0, 0, 0, nil))
+
+EquipmentSets.EpicSet = EquipmentSets:Register("epic_set", "史诗套装",
+                EquipmentEffect.Create("epic_set_two", 0, 0, 0, 0, 0, 0, 0, nil),
+                EquipmentEffect.Create("epic_set_four", 0, 0, 0, 0, 0, 0, 0, nil),
+                EquipmentEffect.Create("epic_set_six", 0, 0, 0, 0, 0, 0, 0, nil))
+
+EquipmentSets.LegendarySet = EquipmentSets:Register("legendary_set", "传说套装",
+                EquipmentEffect.Create("legendary_set_two", 0, 0, 0, 0, 0, 0, 0, nil),
+                EquipmentEffect.Create("legendary_set_four", 0, 0, 0, 0, 0, 0, 0, nil),
+                EquipmentEffect.Create("legendary_set_six", 0, 0, 0, 0, 0, 0, 0, nil))
+
+EquipmentSets.MythicSet = EquipmentSets:Register("mythic_set", "神话套装",
+                EquipmentEffect.Create("mythic_set_two", 0, 0, 0, 0, 0, 0, 0, nil),
+                EquipmentEffect.Create("mythic_set_four", 0, 0, 0, 0, 0, 0, 0, nil),
+                EquipmentEffect.Create("mythic_set_six", 0, 0, 0, 0, 0, 0, 0, nil))
+
+return EquipmentSets

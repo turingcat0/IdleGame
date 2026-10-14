@@ -1,0 +1,65 @@
+local EffectDefinition = require("Gameplay.Effects.EffectDefinition")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+local EffectTypes = require("Config.Generated.EffectTypes")
+
+---@class ImmortalTotemEffectDefinition : EffectDefinition
+local ImmortalTotemEffectDefinition = EffectDefinition:extend()
+
+---@param target Entity
+---@param source Entity?
+---@param params table?
+---@param ctx DamageContext
+---@return boolean? 返回 true 表示效果应被移除
+function ImmortalTotemEffectDefinition:OnInterceptDamage(target, source, params, ctx)
+    if ctx.amount <= 0 then return false end
+    if target.health - ctx.amount > 0 then return false end
+
+    local cost = params.cost or 50
+    if target.inventory.crystals < cost then return false end
+
+    target.inventory:SpendCrystal(cost)
+
+    ctx.intercepted = true
+    ctx.amount = 0
+
+    self:TriggerReviveEffects(target)
+
+    return true
+end
+
+---@param player Player
+function ImmortalTotemEffectDefinition:TriggerReviveEffects(player)
+    local GameManager = require("GameManager")
+
+    -- 不死图腾触发瞬间的爆发特效
+    if GameManager.vfxManager and GameManager.vfxManager.spawner then
+        GameManager.vfxManager.spawner:Spawn("immortal_totem_trigger", player.position)
+    end
+
+    local EffectFactory = require("Gameplay.Effects.EffectFactory")
+    local maxHealth = player.attributes[AttributeType.MaxHealth]:GetFinalValue()
+    local attack = player.attributes[AttributeType.Attack]:GetFinalValue()
+
+    -- 护盾：50% 最大生命值，持续 10 秒
+    local shield = EffectFactory.CreateInstance(EffectTypes.shield, player, player, 10, { amount = maxHealth * 0.5 })
+    player:AddEffect(shield)
+
+    -- 生命恢复：每秒 20% 攻击力，持续 5 秒，叠 3 层
+    local heal = EffectFactory.CreateInstance(EffectTypes.heal, player, player, 5, { dps = attack * 0.2 })
+    player:AddEffect(heal)
+    heal:AddStack()
+    heal:AddStack()
+
+    -- 攻击提升：+50% 攻击力，持续 10 秒
+    local atkUp = EffectFactory.CreateInstance(EffectTypes.attack_up, player, player, 10, { value = attack * 0.5 })
+    player:AddEffect(atkUp)
+
+    -- 全场敌人眩晕 5 秒
+    local enemies = GameManager.levelManager.enemyManager:GetAll()
+    for _, enemy in ipairs(enemies) do
+        local stun = EffectFactory.CreateInstance(EffectTypes.stun, enemy, player, 5, {})
+        enemy:AddEffect(stun)
+    end
+end
+
+return ImmortalTotemEffectDefinition

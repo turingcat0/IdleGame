@@ -1,0 +1,13 @@
+id,name,enemyType,attack,defense,speed,maxHealth,critChance,critDamage,skillId,expReward,isBoss,size,dropRate,dropRarityBonus
+dino,Dino,normal,1,10,0.3,5,0.05,0.5,enemy_default,1,false,1.0,0.20,0
+dog,Dog,normal,0.5,12,0.4,10,0.05,0.5,enemy_default,1,false,1.0,0.25,0
+opossum,负鼠,normal,0.8,8,0.5,8,0.05,0.5,enemy_bite,2,false,0.8,0.25,2
+bat,蝙蝠,normal,1.2,8,0.3,12,0.05,0.5,enemy_poison,4,false,0.9,0.35,5
+bear,熊,elite,2.0,15,0.2,25,0.05,0.5,enemy_enrage,5,false,1.5,0.35,8
+eagle,鹰,elite,1.5,6,0.25,15,0.05,0.5,enemy_curse,5,false,1.0,0.40,5
+boss_1,腐泥怪,boss,4,2,0,80,0.1,1.0,boss_1_breath,50,true,2,1.00,10
+boss_2,秃鹫王,boss,4,2,0,80,0.1,1.0,boss_2_bolt,80,true,1.6,1.00,15
+boss_3,巨蛙长老,boss,0.5,1,0,30,0.1,1.2,boss_3_smash,115,true,2.2,1.00,20
+boss_4,兔灵刺客,boss,7,3,0.0,150,0.12,1.3,boss_4_dark,250,true,1.8,1.00,25
+boss_5,甲虫王,boss,7,3,0.0,150,0.15,1.5,boss_5_flame,400,true,2.0,1.00,30
+boss_6,猪灵战士,boss,7,3,0.0,150,0.2,2.0,boss_6_fury,800,true,2.5,1.00,35

@@ -1,0 +1,29 @@
+local GameManager = require("GameManager")
+
+---@type CS.UnityEngine.MonoBehaviour
+local self = self
+
+---@type CS.UnityEngine.UI.Button
+local button = nil
+
+function Start()
+    button = self:GetComponent(typeof(CS.UnityEngine.UI.Button))
+    button.onClick:AddListener(OnButtonClicked)
+end
+
+function OnDestroy()
+    button.onClick:RemoveListener(OnButtonClicked)
+end
+
+function OnButtonClicked()
+    local windowGo = CS.UnityEngine.GameObject.Find("CombatStatsWindow")
+    if not windowGo then
+        print("[CombatStatsButton] 找不到 CombatStatsWindow")
+        return
+    end
+
+    local lb = windowGo:GetComponent(typeof(CS.LuaBehaviour))
+    if lb and lb.scriptEnv then
+        lb.scriptEnv.Show()
+    end
+end

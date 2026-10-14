@@ -1,0 +1,97 @@
+---@type CS.UnityEngine.MonoBehaviour
+local self = self
+local GameManager = require "GameManager"
+local EventSystem = require "Event.EventSystem"
+local EquipmentSlot = require "Gameplay.Items.EquipmentSlot"
+
+---@type Player
+local player
+---@type CS.UnityEngine.GameObject
+local armorUI
+---@type table<EquipmentSlot, CS.UnityEngine.Transform>
+local backgroundSlots = {}
+---@type table<EquipmentSlot, CS.UnityEngine.UI.Image>
+local imageSlots = {}
+---@type table<EquipmentSlot, CS.UnityEngine.Transform>
+local dummySlots = {}
+---@type table<EquipmentSlot, CS.UnityEngine.UI.Text>
+local levelTextSlots = {}
+
+function Start()
+    player = GameManager.player
+    armorUI = CS.UnityEngine.GameObject.Find("ArmorPanel")
+    if armorUI == nil then
+        local uiRoot = CS.UnityEngine.GameObject.Find("UIRoot")
+        if uiRoot then
+            local t = uiRoot.transform:Find("ArmorPanel")
+            if t then
+                armorUI = t.gameObject
+            end
+        end
+    end
+    EventSystem:RegisterEquipmentChangedListener(player, nil, OnEquipmentChanged)
+    for _, value in pairs(EquipmentSlot) do
+        local go = self.transform:Find("Slot"..value)
+        ---@type CS.UnityEngine.UI.Button Description
+        local button = go:GetComponent(typeof(CS.UnityEngine.UI.Button))
+        button.onClick:AddListener(function ()
+            HandleButtonPressed(value)
+        end)
+
+
+        local background = go:Find("background")
+        local image = background:Find("Icon"):GetComponent(typeof(CS.UnityEngine.UI.Image))
+        local dummy = go:Find("dummy")
+        local levelText = go:Find("Level"):GetComponent(typeof(CS.TMPro.TMP_Text))
+        backgroundSlots[value] = background
+        imageSlots[value] = image
+        dummySlots[value] = dummy
+        levelTextSlots[value] = levelText
+    end
+    RefreshInventory(player)
+
+end
+
+function HandleButtonPressed(slot)
+    local itemStack =  player.inventory:GetSlot(slot)
+    if itemStack then
+        armorUI:SetActive(true)
+        ---@type LuaBehaviour
+        local lb = armorUI:GetComponent(typeof(CS.LuaBehaviour))
+        lb.scriptEnv.Init(itemStack)
+    end
+end
+
+function OnDestroy()
+    EventSystem:RemoveEquipmentChangedListener(player, nil, OnEquipmentChanged)
+end
+
+function RefreshInventory(player)
+    for _, slot in pairs(EquipmentSlot) do
+        local item = player.inventory:GetSlot(slot)
+        OnEquipmentChanged(player, slot, nil, item)
+    end
+end
+
+
+
+---@param slot EquipmentSlot
+---@param old ItemInstance?
+---@param new ItemInstance?
+function OnEquipmentChanged(player, slot, old, new)
+    if new then
+        backgroundSlots[slot].gameObject:SetActive(true)
+        imageSlots[slot].sprite = CS.UnityEngine.Resources.Load("Textures/"..new.item.id, typeof(CS.UnityEngine.Sprite))
+        imageSlots[slot].color = CS.UnityEngine.Color(1.0, 1.0, 1.0, 1.0)
+        dummySlots[slot].gameObject:SetActive(false)
+        levelTextSlots[slot].text = new.level.."级"
+        levelTextSlots[slot].gameObject:SetActive(true)
+    else
+        backgroundSlots[slot].gameObject:SetActive(false)
+        imageSlots[slot].sprite = nil
+        imageSlots[slot].color = CS.UnityEngine.Color(1.0, 1.0, 1.0, 0.0)
+        dummySlots[slot].gameObject:SetActive(true)
+        levelTextSlots[slot].text = ""
+        levelTextSlots[slot].gameObject:SetActive(false)
+    end
+end

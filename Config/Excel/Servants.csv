@@ -1,0 +1,9 @@
+id,name,attack,defense,speed,maxHealth,maxMana,normalSkillId,combatSkillId,passiveId,auraId,maxLevel,attackGrowth,defenseGrowth,maxHealthGrowth,maxManaGrowth,speedGrowth,lifesteal,lifestealGrowth,upgradeBaseCost
+guard,护卫,30,98,3.2,1014,10,servant_melee,servant_slash,,guard_aura,10,0.10,0.10,0.10,0.05,0,0.06,0.05,300
+ranger,游侠,45,89,3,797,10,servant_melee,servant_pierce,,ranger_aura,10,0.10,0.10,0.10,0.05,0,0.03,0.05,300
+crusher,碎击者,43,89,2.7,841,10,servant_melee,servant_smash,,crusher_aura,10,0.10,0.10,0.10,0.05,0,0.04,0.04,300
+mage,法师,41,89,2.8,752,20,servant_melee,servant_bolt,,mage_aura,10,0.10,0.10,0.10,0.05,0,0.02,0.04,300
+cleric,牧师,26,89,2.5,797,25,servant_melee,servant_heal,,cleric_aura,10,0.10,0.10,0.10,0.05,0,0.08,0.05,300
+berserker,狂战士,48,89,3.1,708,10,servant_melee,servant_frenzy,,berserker_aura,10,0.10,0.10,0.10,0.05,0,0.025,0.05,300
+rogue,刺客,46,89,3.5,752,10,servant_melee,servant_backstab,,rogue_aura,10,0.10,0.10,0.10,0.05,0,0.035,0.05,300
+paladin,圣骑士,30,98,2.9,1014,15,servant_melee,servant_holy,,paladin_aura,10,0.10,0.10,0.10,0.05,0,0.05,0.04,300

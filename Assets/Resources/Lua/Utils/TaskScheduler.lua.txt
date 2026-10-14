@@ -1,0 +1,41 @@
+local Object = require("Utils.classic")
+---@alias Callback {
+--- time: number,
+--- object: any,
+--- func: any,
+--- args: any[]}
+
+---@class TaskScheduler
+---@field callbacks Callback[]
+local TaskScheduler = Object:extend()
+
+function TaskScheduler:New()
+    self.callbacks = {}
+end
+
+---
+---@param time number
+---@param object any
+---@param func function
+---@param ... any
+function TaskScheduler:Run(time, object, func, ...)
+    table.insert(self.callbacks, {time = time, object = object, func = func, args = ...})
+end
+
+function TaskScheduler:OnUpdate()
+    for i = #self.callbacks, 1,-1 do
+        local callback = self.callbacks[i]
+        if CS.UnityEngine.Time.time > callback.time then
+            if callback.object then
+                callback.func(callback.object, callback.args)
+            else
+                callback.func(callback.args)
+            end
+            table.remove(self.callbacks, i)
+        end
+    end
+end
+
+
+
+return TaskScheduler

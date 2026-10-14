@@ -1,0 +1,88 @@
+local Object = require("Utils.classic")
+local EventSystem = require("Event.EventSystem")
+local EffectVisuals = require("Config.EffectVisuals")
+
+---@class EntityVfxBinder 把 buff 事件转成染色/挂载跟随特效，数据层完全不感知
+---@field renderer CS.UnityEngine.SpriteRenderer
+---@field followTransform CS.UnityEngine.Transform
+---@field entity Entity
+---@field spawner VfxSpawner
+---@field baseColor CS.UnityEngine.Color  实体原始颜色（构造时缓存一次）
+---@field activeTints table<string, {priority: number, color: CS.UnityEngine.Color}>
+---@field activeVfx table<string, CS.UnityEngine.GameObject>
+local EntityVfxBinder = Object:extend()
+
+---@param renderer CS.UnityEngine.SpriteRenderer
+---@param followTransform CS.UnityEngine.Transform
+---@param entity Entity
+---@param spawner VfxSpawner
+function EntityVfxBinder:New(renderer, followTransform, entity, spawner)
+    self.renderer = renderer
+    self.followTransform = followTransform
+    self.entity = entity
+    self.spawner = spawner
+    self.baseColor = renderer.color
+    self.activeTints = {}
+    self.activeVfx = {}
+    EventSystem:RegisterEffectAddedListener(entity, self, EntityVfxBinder.OnEffectAdded)
+    EventSystem:RegisterEffectRemovedListener(entity, self, EntityVfxBinder.OnEffectRemoved)
+end
+
+---@param effect EffectInstance
+function EntityVfxBinder:OnEffectAdded(effect)
+    local id = effect.definition.id
+    local spec = EffectVisuals[id]
+
+    if spec and spec.tint then
+        self.activeTints[id] = { priority = spec.tintPriority or 0, color = spec.tint }
+        self:RefreshTint()
+    end
+
+    -- 特效按约定自动推导：buff_<effectId>_loop；EffectVisuals 里显式配 vfx 可覆盖/禁用
+    local vfxName = spec and spec.vfx
+    if vfxName == nil then
+        vfxName = "buff_" .. id .. "_loop"
+    end
+
+    if vfxName and self.spawner then
+        local go = self.spawner:SpawnFollow(vfxName, self.followTransform, self.entity)
+        if go then
+            self.activeVfx[id] = go
+        end
+    end
+end
+
+---@param effect EffectInstance
+function EntityVfxBinder:OnEffectRemoved(effect)
+    local id = effect.definition.id
+    self.activeTints[id] = nil
+    self:RefreshTint()
+
+    local go = self.activeVfx[id]
+    if go then
+        CS.UnityEngine.Object.Destroy(go)
+        self.activeVfx[id] = nil
+    end
+end
+
+function EntityVfxBinder:RefreshTint()
+    local best = nil
+    for _, tint in pairs(self.activeTints) do
+        if not best or tint.priority > best.priority then
+            best = tint
+        end
+    end
+    self.renderer.color = best and best.color or self.baseColor
+end
+
+function EntityVfxBinder:Dispose()
+    EventSystem:RemoveEffectAddedListener(self.entity, self, EntityVfxBinder.OnEffectAdded)
+    EventSystem:RemoveEffectRemovedListener(self.entity, self, EntityVfxBinder.OnEffectRemoved)
+    for _, go in pairs(self.activeVfx) do
+        CS.UnityEngine.Object.Destroy(go)
+    end
+    self.activeTints = {}
+    -- 不在这里 RestoreTint：GameObject 销毁时 SpriteRenderer 也已失效
+end
+
+return EntityVfxBinder

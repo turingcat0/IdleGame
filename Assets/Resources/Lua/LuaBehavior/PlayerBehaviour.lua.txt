@@ -1,0 +1,25 @@
+---@type CS.UnityEngine.GameObject
+local self = self
+local PlayerView = require("Gameplay.Entities.Player.PlayerView")
+local GameManager = require("GameManager")
+---@type PlayerView
+local playerView = nil
+
+function Start()
+    playerView = PlayerView(self)
+end
+
+
+function Update()
+    playerView:OnUpdate()
+end
+
+function OnDestroy()
+    playerView:Dispose()
+end
+
+---供抛射物命中时反查所属实体
+---@return Player
+function GetEntity()
+    return GameManager.player
+end

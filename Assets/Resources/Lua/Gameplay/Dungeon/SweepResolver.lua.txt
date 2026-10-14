@@ -1,0 +1,107 @@
+local StageConfigs = require("Config.Generated.Stages")
+local WaveConfigs  = require("Config.Generated.Waves")
+local EnemyConfigs = require("Config.Generated.Enemies")
+local ItemInstance  = require("Gameplay.Items.ItemInstance")
+local BalanceConfig = require("Gameplay.Stats.BalanceConfig")
+
+---默认 boss 掉落概率（配置缺失时保证必掉）
+local DEFAULT_BOSS_DROP_RATE = 1.0
+---默认 boss 品质加成
+local DEFAULT_BOSS_RARITY_BONUS = 0
+
+---@class SweepResolver 纯函数：模拟一次副本通关的奖励结算（不触碰 player/inventory/event/UI）
+local SweepResolver = {}
+
+---计算单个敌人的经验奖励
+---@param enemyId string
+---@param level integer
+---@return integer
+local function ExpOfOne(enemyId, level)
+    return BalanceConfig.GetEnemyExpReward(enemyId, level)
+end
+
+---获取指定关卡的波次配置列表（按 waveIndex 排序）
+---并把 difficulty 对齐到 stage.recommendedLevel
+---@param stageId string
+---@return table[]
+local function GetWavesForStage(stageId)
+    local sc = StageConfigs[stageId]
+    local recommendedLevel = sc and sc.recommendedLevel or 1
+
+    local result = {}
+    for _, wave in pairs(WaveConfigs) do
+        if wave.stageId == stageId then
+            wave.difficulty = math.max(1, recommendedLevel + (wave.waveIndex - 3))
+            table.insert(result, wave)
+        end
+    end
+    table.sort(result, function(a, b) return a.waveIndex < b.waveIndex end)
+    return result
+end
+
+---解析 enemyPool 字符串为 ID 列表
+---@param enemyPoolStr string
+---@return string[]
+local function ParsePool(enemyPoolStr)
+    local pool = {}
+    for id in string.gmatch(enemyPoolStr, "[^;]+") do
+        table.insert(pool, id)
+    end
+    return pool
+end
+
+---模拟一次副本通关的奖励结算
+---@param stageId string
+---@param playerLevel integer 未使用（保留接口），boss 等级取 recommendedLevel
+---@param lootManager LootManager 用于 boss 掉落判定
+---@return table {exp=, crystal=, coins=, bossItem=ItemInstance?}
+function SweepResolver.Resolve(stageId, playerLevel, lootManager)
+    local sc = StageConfigs[stageId]
+    if not sc then
+        return {exp = 0, crystal = 0, coins = 0, bossItem = nil}
+    end
+
+    local waves = GetWavesForStage(stageId)
+    local totalExp = 0
+
+    --- 逐波逐怪模拟：与 EnemySpawner.SpawnCluster 的随机逻辑一致
+    for _, wave in ipairs(waves) do
+        local pool = ParsePool(wave.enemyPool)
+        if #pool > 0 then
+            for _ = 1, wave.count do
+                local enemyId = pool[math.random(1, #pool)]
+                local level = math.max(wave.difficulty + math.random(-3, 3), 1)
+                totalExp = totalExp + ExpOfOne(enemyId, level)
+            end
+        end
+    end
+
+    --- boss 经验
+    if sc.bossId then
+        totalExp = totalExp + ExpOfOne(sc.bossId, sc.recommendedLevel)
+    end
+
+    --- boss 掉落：读取敌人配置中的 dropRate / dropRarityBonus，复刻 LootManager 的三步随机
+    local bossItem = nil
+    if lootManager and sc.bossId then
+        local bossConfig = EnemyConfigs[sc.bossId]
+        local dropRate = (bossConfig and bossConfig.dropRate) or DEFAULT_BOSS_DROP_RATE
+        if math.random() < dropRate then
+            local level = sc.recommendedLevel
+            local rarityBonus = (bossConfig and bossConfig.dropRarityBonus) or DEFAULT_BOSS_RARITY_BONUS
+            local rarity = lootManager:RandomDropQuality(level, rarityBonus)
+            local item = lootManager:RandomItemOfRarity(rarity)
+            local itemLevel = lootManager:RandomDropLevel(level, rarity)
+            bossItem = ItemInstance(item, itemLevel)
+        end
+    end
+
+    return {
+        exp = totalExp,
+        crystal = sc.crystalReward or 0,
+        coins = sc.coinReward or 0,
+        bossItem = bossItem,
+    }
+end
+
+return SweepResolver

@@ -1,0 +1,372 @@
+local Object = require("Utils.classic")
+local utils  = require("Utils.utils")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+local SkillType = require("Gameplay.Skills.SkillType")
+local EventSystem = require("Event.EventSystem")
+local EventType   = require("Event.EventType")
+local SkillCooldownTracker = require("Gameplay.Skills.SkillCooldownTracker")
+local SkillSelector = require("Gameplay.Skills.SkillSelector")
+local EffectManager = require("Gameplay.Effects.EffectManager")
+local EntityState = require("Gameplay.Entities.EntityState")
+
+---@class Entity 所有实体的基类
+---@field attributes table<AttributeType, Attribute>
+---@field tags string[]
+---@field skillCooldownTracker SkillCooldownTracker
+---@field skillSelector SkillSelector
+---@field activeSkill Skill? 正在使用的技能
+---@field skillIntent Skill? 想要使用的战斗技能
+---@field normalSkill Skill? 普通技能（mana 不足时的 fallback）
+---@field signatureSkills Skill[] 掌控技列表
+---@field skillDurationLeft number 当前技能剩余演出时间
+---@field nextSkill Skill? 锁定的下一个技能，为 nil 时由 GetNextSkillToCast 惰性选出
+---@field knockbackSpeed number 击退速度（带方向）
+---@field knockbackDistanceLeft number 剩余击退距离
+---@field effectManager EffectManager 效果管理器
+---@field stunned boolean 是否处于晕眩状态
+---@field exclusiveSubstate integer ExlusiveEffect 状态下的子类型
+---@field dead boolean 死亡的唯一真相，只由 Die 置起、由复活流程置回
+---@field state EntityState 运行时状态，实体自己维护，View 只读
+---@field moveSpeed number 当前移动速度（非负），方向由 facing 决定
+---@field facing number 朝向：1 向右，-1 向左
+local Entity = Object:extend()
+
+function Entity:New()
+    self.uuid = CS.System.Guid.NewGuid():ToString()
+    self.attributes = {}
+    self.tags = {}
+    self.position = 0
+    self.dead = false
+    self.state = EntityState.Idling
+    self.health = 0
+    self.mana = 0
+
+    self.activeSkill = nil
+    self.skillDurationLeft = 0
+    self.nextSkill = nil
+    self.skillIntent = nil
+    self.normalSkill = nil
+    self.signatureSkills = {}
+    self.skillCooldownTracker = SkillCooldownTracker()
+    self.skillSelector = SkillSelector(self)
+    self.knockbackSpeed = 0
+    self.knockbackDistanceLeft = 0
+    self.moveSpeed = 0
+    self.facing = 1
+    self.stunned = false
+    self.exclusiveSubstate = 0
+    self.effectManager = EffectManager(self)
+end
+
+---深拷贝所有字段到同类型新实例，保留 uuid（身份等价）
+---不调用 New()，避免重复初始化和浪费 uuid 生成
+---调用方需自行修复反向引用（如 effectManager 的 entity 指针）
+---@return Entity
+function Entity:Clone()
+    local clone = setmetatable({}, getmetatable(self))
+    for k, v in pairs(self) do
+        clone[k] = utils.DeepCopy(v)
+    end
+    clone.uuid = self.uuid
+    return clone
+end
+
+---不发血量变化事件地改血。归零同样会走 Die，只是不广播死亡事件
+---@param health number
+function Entity:SetHealthWithoutNotififaction(health)
+    self.health = health
+    if self.health == 0 then
+        self:Die(true)
+    end
+end
+
+function Entity:SetHealth(health)
+    local old = self.health
+    if old ~= health then
+        self.health = health
+        EventSystem:FireHealthChangedEvent(self, old, health)
+    end
+    if self.health == 0 then
+        self:Die()
+    end
+end
+
+---死亡迁移的唯一入口：置标记、切状态、做死亡清理，最后按需广播
+---@param silent boolean? true 则不广播 EntityDied（清场时用）
+function Entity:Die(silent)
+    if self.dead then return end
+    self.dead = true
+    self.state = EntityState.Dead
+    self:OnDied()
+    if not silent then
+        EventSystem:FireEvent(EventType.EntityDied, self, self)
+    end
+end
+
+---@param ctx DamageContext
+---@return number finalDamage 减伤后实际造成的伤害
+function Entity:TakeDamage(ctx)
+    self.effectManager:ProcessModify(ctx)
+    self:MitigateDamage(ctx)
+    self.effectManager:ProcessMitigate(ctx)
+    self.effectManager:ProcessIntercept(ctx)
+
+    if ctx.intercepted then
+        ctx.finalAmount = 0
+        return 0
+    end
+
+    ctx.finalAmount = ctx.amount
+    self:ApplyDamage(ctx)
+    self.effectManager:ProcessPost(ctx)
+    return ctx.finalAmount
+end
+
+---减伤阶段（可被效果在 ProcessMitigate 中再调整）
+---@param ctx DamageContext
+function Entity:MitigateDamage(ctx)
+    local def = self.attributes[AttributeType.Defense]:GetFinalValue()
+    local defenceRate = def / (50 + def)
+    ctx.amount = (1 - defenceRate) * ctx.amount
+end
+
+---实际扣血并触发 EntityDamageTaken 事件
+---@param ctx DamageContext
+function Entity:ApplyDamage(ctx)
+    local old = self.health
+    self:SetHealth(math.max(0, self.health - ctx.amount))
+    EventSystem:FireEvent(EventType.EntityDamageTaken, self, self, old, self.health)
+end
+
+function Entity:InitHealth()
+    self.health = self.attributes[AttributeType.MaxHealth]:GetFinalValue()
+end
+
+---是否可被控制移动
+---@return boolean
+function Entity:CanMove()
+    return not self.stunned and not self:IsDead()
+end
+
+---是否能释放技能
+---@return boolean
+function Entity:CanCast()
+    return not self.stunned and not self:IsDead()
+end
+
+---设置晕眩状态
+---@param stunned boolean
+function Entity:SetStunned(stunned)
+    self.stunned = stunned
+end
+
+---是否晕眩中
+---@return boolean
+function Entity:IsStunned()
+    return self.stunned
+end
+
+---死亡查询的唯一读取口。血量为 0 只是致死的原因，死亡本身由 dead 标记latch住，
+---所以事后被治疗（吸血、群疗）也不会让尸体复活
+---@return boolean
+function Entity:IsDead()
+    return self.dead
+end
+
+---计算一次伤害，包含暴击判定
+---子类可以覆写，但默认逻辑对玩家和敌人都适用
+---@return number damage
+---@return boolean crit
+function Entity:DealDamage()
+    local attack = self.attributes[AttributeType.Attack]
+    local critChanceAttr = self.attributes[AttributeType.CritChance]
+    local critDamageAttr = self.attributes[AttributeType.CritDamage]
+
+    local critChance = critChanceAttr and critChanceAttr:GetFinalValue() or 0
+    local critDamage = critDamageAttr and critDamageAttr:GetFinalValue() or 0
+
+    local crit = math.random() < critChance
+    local multiplier = 1 + (crit and critDamage or 0)
+    return attack:GetFinalValue() * multiplier, crit
+end
+
+function Entity:OnUpdate()
+    if self:IsDead() then
+        return
+    end
+
+    local deltaTime = CS.UnityEngine.Time.deltaTime
+    self.effectManager:OnUpdate(deltaTime)
+    self.skillCooldownTracker:OnUpdate(deltaTime)
+
+    -- 击退位移
+    if self:IsKnockback() then
+        local delta = self.knockbackSpeed * deltaTime
+        self.position = self.position + delta
+        self.knockbackDistanceLeft = self.knockbackDistanceLeft - math.abs(delta)
+        -- 每帧衰减 80%，让停止更自然
+        self.knockbackSpeed = self.knockbackSpeed * (1 - 8 * deltaTime)
+
+        if self.knockbackDistanceLeft <= 0 or math.abs(self.knockbackSpeed) < 0.1 then
+            self.knockbackSpeed = 0
+            self.knockbackDistanceLeft = 0
+        end
+    end
+
+    if self.activeSkill then
+        self.skillDurationLeft = self.skillDurationLeft - deltaTime
+        if self.skillDurationLeft <= 0 then
+            self.skillDurationLeft = 0
+            self.activeSkill = nil
+            --- 演出结束就作废锁定，下一次 GetNextSkillToCast 会重新选
+            self.nextSkill = nil
+        end
+    end
+end
+
+---按当前速度与朝向推进位置。击退期间位移由 OnUpdate 接管，这里不叠加
+function Entity:Move()
+    if self:IsKnockback() then return end
+    self.position = self.position + self.moveSpeed * self.facing * CS.UnityEngine.Time.deltaTime
+end
+
+---是否正在击退中
+---@return boolean
+function Entity:IsKnockback()
+    return self.knockbackSpeed ~= 0
+end
+
+---施加击退
+---@param speed number 速度大小
+---@param distance number 距离
+---@param direction number 方向 1 或 -1
+function Entity:ApplyKnockback(speed, distance, direction)
+    if speed <= 0 or distance <= 0 then return end
+    self.knockbackSpeed = speed * direction
+    self.knockbackDistanceLeft = distance
+end
+
+---治疗，不超过生命上限。尸体不接受治疗，否则会出现"死了但有血"的状态
+---@param health number
+function Entity:Heal(health)
+    if self:IsDead() then return end
+    self:SetHealth(math.min(self.health + health, self.attributes[AttributeType.MaxHealth]:GetFinalValue()))
+end
+
+---回蓝，不超过法力上限
+---@param mana number
+function Entity:AddMana(mana)
+    self:SetMana(math.min(self.mana + mana, self.attributes[AttributeType.MaxMana]:GetFinalValue()))
+end
+
+---@param mana number
+function Entity:SetMana(mana)
+    local old = self.mana
+    if old ~= mana then
+        self.mana = mana
+        EventSystem:FireManaChangedEvent(self, old, mana)
+    end
+end
+
+---判断是否能支付技能消耗。敌人的法力上限与 manaCost 都是 0，判定天然恒真
+---@param skill Skill
+---@return boolean
+function Entity:CanAffordSkill(skill)
+    return self.mana - skill:Get(AttributeType.ManaCost) >= 0
+end
+
+---扣除技能消耗。manaCost 为负数即回蓝，同样受上限约束
+---@param skill Skill
+function Entity:DeductSkillCost(skill)
+    self:SetMana(math.min(
+        self.mana - skill:Get(AttributeType.ManaCost),
+        self.attributes[AttributeType.MaxMana]:GetFinalValue()
+    ))
+end
+
+---获得击杀经验。默认吞掉（敌人不成长），玩家和随从各自覆写去向
+---@param exp number
+function Entity:AddExp(exp)
+end
+
+---死亡清理。死亡会停掉 OnUpdate，所有靠 OnUpdate 流干的量都必须在这里归零，
+---否则复活后会带着上一条命的残值继续生效（击退会接着滑、施法演出会永久卡住施法判定）
+function Entity:OnDied()
+    self.effectManager:ClearAll()
+    self.knockbackSpeed = 0
+    self.knockbackDistanceLeft = 0
+    self.moveSpeed = 0
+    self.activeSkill = nil
+    self.skillDurationLeft = 0
+    self.nextSkill = nil
+end
+
+---给当前实体添加一个效果实例
+---@param instance EffectInstance
+---@return EffectInstance
+function Entity:AddEffect(instance)
+    return self.effectManager:AddEffect(instance)
+end
+
+---设置下一个想释放的战斗技能意图
+---@param skill Skill?
+function Entity:SetSkillIntent(skill)
+    self.skillIntent = skill
+end
+
+---判断指定技能当前是否可释放（纯检查，无副作用）
+---掌控技不需要目标；战斗/普通技需要目标在射程内
+---@param skill Skill
+---@return boolean
+function Entity:CanCastSkill(skill)
+    if not self:CanCast() then return false end
+    if self.skillDurationLeft > 0 then return false end
+    if not self.skillCooldownTracker:IsReady(skill) then return false end
+    if not self:CanAffordSkill(skill) then return false end
+
+    local GameManager = require("GameManager")
+    if skill.skillType ~= SkillType.Signature then
+        if not GameManager.levelManager.combatManager:HasGoal(self, skill) then return false end
+    end
+
+    return true
+end
+
+---尝试释放指定技能
+---@param skill Skill
+---@return boolean
+function Entity:TryCastSkill(skill)
+    if not self:CanCastSkill(skill) then return false end
+
+    local GameManager = require("GameManager")
+    self.activeSkill = skill
+    self.skillDurationLeft = skill.duration
+    self.skillCooldownTracker:StartCooldown(skill)
+    GameManager.levelManager.combatManager:UseSkill(self, skill)
+    self:DeductSkillCost(skill)
+    return true
+end
+
+---尝试释放锁定的下一个技能
+---@return boolean
+function Entity:TryCast()
+    local skill = self:GetNextSkillToCast()
+    if not skill then return false end
+    local success = self:TryCastSkill(skill)
+    if success then
+        self.nextSkill = nil
+    end
+    return success
+end
+
+---返回锁定的下一个技能。nextSkill 是派生状态：为空就当场选一个并锁定，
+---锁定一直保持到它被放出去（TryCast）或演出结束作废，所以没人需要手工种下去
+---@return Skill?
+function Entity:GetNextSkillToCast()
+    if not self.nextSkill then
+        self.nextSkill = self.skillSelector:PickNext(self.skillIntent)
+    end
+    return self.nextSkill
+end
+
+return Entity

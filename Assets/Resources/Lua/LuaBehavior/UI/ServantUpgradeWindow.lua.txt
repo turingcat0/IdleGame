@@ -1,0 +1,308 @@
+local GameManager = require("GameManager")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+local ServantAura = require("Gameplay.Entities.Servants.ServantAura")
+local ServantAuraConfigs = require("Config.Generated.ServantAuras")
+
+---需要的节点结构：
+---ServantUpgradeWindow (Canvas + LuaBehaviour)
+---└ Background
+---    ├ Frame
+---    ├ TopBar/{Title, ResourcePanel/{Coin/{Background/{Icon, Count}}, Crystal/{Background/{Icon, Count}}}, CloseButton/{Frame, Image}}
+---    ├ CharacterPanel/{Portrait/{Frame}, PrevButton, NextButton, Name, PowerParent/{PowerIcon, Power}}
+---    ├ UpgradePanel/{LevelText, StatsArea/StatRow{Health,Attack,Defense}/{Icon, Label, Old, Arrow, New},
+---    │               CostArea/{CostCoin/{CoinLable, Icon, CoinAmount}}, UpgradeButton/{Text}, ContinuousButton/{Text}}
+---    └ SkillArea/{SkillCard_Aura, SkillCard_Combat, SkillCard_Normal}/{Frame/{TitleFrame}, Title, Name, Desc}
+
+---@type CS.UnityEngine.MonoBehaviour
+local self = self
+
+---当前选中随从在 GetOwned() 列表中的索引
+local selectedIndex = 1
+
+local AttrNames = {
+    [AttributeType.MaxHealth] = "生命",
+    [AttributeType.MaxMana] = "法力",
+    [AttributeType.Attack] = "攻击",
+    [AttributeType.Defense] = "防御",
+    [AttributeType.CritChance] = "暴击率",
+    [AttributeType.CritDamage] = "暴击伤害",
+    [AttributeType.Speed] = "速度",
+}
+
+-- ==================== Helpers ====================
+
+local function GetLoadout()
+    return GameManager.player.servantLoadout
+end
+
+local function GetInventory()
+    return GameManager.player.inventory
+end
+
+---必须节点/组件查找：找不到直接抛错，不允许静默跳过或 fallback
+local function SafeFind(path, expectedType)
+    local obj = self.transform:Find(path)
+    if not obj then
+        error("[ServantUpgradeWindow] 找不到必须节点: " .. path)
+    end
+    if expectedType then
+        local comp = obj:GetComponent(expectedType)
+        if not comp then
+            error("[ServantUpgradeWindow] 节点 " .. path .. " 缺少必须组件")
+        end
+        return comp
+    end
+    return obj
+end
+
+---设置必须 TMP 文本节点内容：节点/组件缺失直接抛错；文本内容本身可以是业务上的"无"
+local function SetText(path, text)
+    local node = self.transform:Find(path)
+    if not node then
+        error("[ServantUpgradeWindow] 找不到必须节点: " .. path)
+    end
+    local tmp = node:GetComponent(typeof(CS.TMPro.TextMeshProUGUI))
+    if not tmp then
+        error("[ServantUpgradeWindow] 节点 " .. path .. " 缺少必须的 TextMeshProUGUI 组件")
+    end
+    tmp.text = text
+end
+
+local function GetButton(path)
+    return SafeFind(path, typeof(CS.UnityEngine.UI.Button))
+end
+
+---简化版战力计算（不依赖 Attribute 对象，直接用 baseStats 数值）
+local function CalculatePower(baseStats)
+    local maxHealth = baseStats[AttributeType.MaxHealth] or 0
+    local maxMana   = baseStats[AttributeType.MaxMana] or 0
+    local attack    = baseStats[AttributeType.Attack] or 0
+    local defense   = baseStats[AttributeType.Defense] or 0
+    local ehp = maxHealth * (1 + defense / 100)
+    return math.floor(ehp + attack * 1.5 + maxMana * 0.3)
+end
+
+---把光环配置的 mod 列表格式化为人类可读描述
+local function DescribeAura(servant)
+    if not servant.auraId then return "无光环效果" end
+    local config = ServantAuraConfigs[servant.auraId]
+    if not config then return servant.auraId end
+    local parts = {}
+    for _, mod in ipairs(config.mods) do
+        local attrName = AttrNames[mod.attribute] or ("属性" .. mod.attribute)
+        local valStr
+        if mod.modifierType == 1 then --- FlatAdd
+            if mod.attribute == AttributeType.CritChance or mod.attribute == AttributeType.CritDamage then
+                valStr = string.format("+%.1f%%", mod.value * 100)
+            elseif mod.attribute == AttributeType.Speed then
+                valStr = string.format("+%.1f", mod.value)
+            else
+                valStr = string.format("+%g", mod.value)
+            end
+        else --- Multiply
+            valStr = string.format("+%.0f%%", mod.value * 100)
+        end
+        table.insert(parts, attrName .. valStr)
+    end
+    return "战斗中，全体友方单位" .. table.concat(parts, "，") .. "。"
+end
+
+---战斗技能描述（Skill 没有 description 字段，用 cooldown 拼一个）
+local function DescribeCombatSkill(servant)
+    local skill = servant.combatSkill
+    if not skill then return "无" end
+    return string.format("每%.0f秒释放一次，伤害随攻击力成长。", skill.cooldown or 0)
+end
+
+---普通技能描述
+local function DescribeNormalSkill(servant)
+    local skill = servant.normalSkill
+    if not skill then return "无" end
+    local manaCost = skill:Get(AttributeType.ManaCost) or 0
+    if manaCost < 0 then
+        return string.format("普通攻击，每次命中回复%.0f点法力。", math.abs(manaCost))
+    end
+    return "普通攻击，伤害随攻击力成长。"
+end
+
+---当前选中的随从原型
+local function GetCurrentServant()
+    local owned = GetLoadout():GetOwned()
+    return owned[selectedIndex]
+end
+
+---尝试升级当前随从 1 级，成功返回 true
+local function TryUpgrade()
+    local servant = GetCurrentServant()
+    if not servant then return false end
+    local loadout = GetLoadout()
+    local level = loadout:GetLevel(servant.id)
+    if level >= servant.maxLevel then return false end
+
+    local coinCost = loadout:UpgradeCost(servant.id)
+    local inv = GetInventory()
+    if inv.coins < coinCost then
+        return false
+    end
+    if not inv:SpendCoins(coinCost) then return false end
+    loadout:SetLevel(servant.id, level + 1)
+    return true
+end
+
+-- ==================== Refresh ====================
+
+function Refresh()
+    local servant = GetCurrentServant()
+    if not servant then return end
+
+    local loadout = GetLoadout()
+    local inv = GetInventory()
+    local level = loadout:GetLevel(servant.id)
+
+    ---TopBar 资源
+    SetText("Background/TopBar/ResourcePanel/Coin/Background/Count", tostring(inv.coins))
+    SetText("Background/TopBar/ResourcePanel/Crystal/Background/Count", tostring(inv.crystals))
+
+    ---CharacterPanel
+    SetText("Background/CharacterPanel/Name", servant.name)
+    local currentStats = servant:GetBaseStatsAtLevel(level)
+    SetText("Background/CharacterPanel/PowerParent/Power", "战力 " .. tostring(CalculatePower(currentStats)))
+
+    local portrait = SafeFind("Background/CharacterPanel/Portrait/Portrait",
+        typeof(CS.UnityEngine.UI.Image))
+    if portrait then
+        local sprite = CS.UnityEngine.Resources.Load(
+            "Textures/" .. servant.id, typeof(CS.UnityEngine.Sprite))
+        if sprite then
+            portrait.sprite = sprite
+            portrait.enabled = true
+        else
+            portrait.enabled = false
+        end
+    end
+
+    ---UpgradePanel
+    if level >= servant.maxLevel then
+        SetText("Background/UpgradePanel/LevelText", "Lv." .. level .. " 已满级")
+        for _, stat in ipairs({"Health", "Attack", "Defense"}) do
+            SetText("Background/UpgradePanel/StatsArea/StatRow" .. stat .. "/Old", "")
+            SetText("Background/UpgradePanel/StatsArea/StatRow" .. stat .. "/New", "")
+        end
+        SetText("Background/UpgradePanel/CostArea/CostCoin/CoinAmount", "")
+    else
+        SetText("Background/UpgradePanel/LevelText",
+            string.format("Lv.%d → Lv.%d", level, level + 1))
+        local nextStats = servant:GetBaseStatsAtLevel(level + 1)
+        SetText("Background/UpgradePanel/StatsArea/StatRowHealth/Old",
+            tostring(math.floor(currentStats[AttributeType.MaxHealth] or 0)))
+        SetText("Background/UpgradePanel/StatsArea/StatRowHealth/New",
+            tostring(math.floor(nextStats[AttributeType.MaxHealth] or 0)))
+        SetText("Background/UpgradePanel/StatsArea/StatRowAttack/Old",
+            tostring(math.floor(currentStats[AttributeType.Attack] or 0)))
+        SetText("Background/UpgradePanel/StatsArea/StatRowAttack/New",
+            tostring(math.floor(nextStats[AttributeType.Attack] or 0)))
+        SetText("Background/UpgradePanel/StatsArea/StatRowDefense/Old",
+            tostring(math.floor(currentStats[AttributeType.Defense] or 0)))
+        SetText("Background/UpgradePanel/StatsArea/StatRowDefense/New",
+            tostring(math.floor(nextStats[AttributeType.Defense] or 0)))
+        local coinCost = loadout:UpgradeCost(servant.id)
+        SetText("Background/UpgradePanel/CostArea/CostCoin/CoinAmount", tostring(coinCost))
+    end
+
+    ---SkillArea
+    SetText("Background/SkillArea/SkillCard_Aura/Name", ServantAura.NameOf(servant))
+    SetText("Background/SkillArea/SkillCard_Aura/Desc", DescribeAura(servant))
+
+    local combatSkill = servant.combatSkill
+    if combatSkill then
+        SetText("Background/SkillArea/SkillCard_Combat/Name", combatSkill.name)
+        SetText("Background/SkillArea/SkillCard_Combat/Desc", DescribeCombatSkill(servant))
+    else
+        SetText("Background/SkillArea/SkillCard_Combat/Name", "无")
+        SetText("Background/SkillArea/SkillCard_Combat/Desc", "")
+    end
+
+    local normalSkill = servant.normalSkill
+    if normalSkill then
+        SetText("Background/SkillArea/SkillCard_Normal/Name", normalSkill.name)
+        SetText("Background/SkillArea/SkillCard_Normal/Desc", DescribeNormalSkill(servant))
+    else
+        SetText("Background/SkillArea/SkillCard_Normal/Name", "无")
+        SetText("Background/SkillArea/SkillCard_Normal/Desc", "暂无普通技能")
+    end
+end
+
+-- ==================== Event Handlers ====================
+
+local function OnPrev()
+    local owned = GetLoadout():GetOwned()
+    if #owned == 0 then return end
+    selectedIndex = selectedIndex - 1
+    if selectedIndex < 1 then selectedIndex = #owned end
+    Refresh()
+end
+
+local function OnNext()
+    local owned = GetLoadout():GetOwned()
+    if #owned == 0 then return end
+    selectedIndex = selectedIndex + 1
+    if selectedIndex > #owned then selectedIndex = 1 end
+    Refresh()
+end
+
+local function OnUpgrade()
+    if TryUpgrade() then
+        Refresh()
+    end
+end
+
+local function OnContinuousUpgrade()
+    local count = 0
+    while TryUpgrade() do
+        count = count + 1
+        if count > 100 then break end
+    end
+    if count > 0 then
+        Refresh()
+    end
+end
+
+-- ==================== Lifecycle ====================
+
+function Awake()
+    GetButton("Background/TopBar/CloseButton").onClick:AddListener(Hide)
+    GetButton("Background/CharacterPanel/PrevButton").onClick:AddListener(OnPrev)
+    GetButton("Background/CharacterPanel/NextButton").onClick:AddListener(OnNext)
+    GetButton("Background/UpgradePanel/UpgradeButton").onClick:AddListener(OnUpgrade)
+    GetButton("Background/UpgradePanel/ContinuousButton").onClick:AddListener(OnContinuousUpgrade)
+end
+
+local function GetCanvas()
+    local canvas = self:GetComponent(typeof(CS.UnityEngine.Canvas))
+    if not canvas then
+        error("[ServantUpgradeWindow] 根节点缺少必须的 Canvas 组件")
+    end
+    return canvas
+end
+
+function Start()
+    GetCanvas().enabled = false
+end
+
+---@param servantId string? 指定要打开哪个随从（随从界面点升级时传进来），不传就沿用上次的选择
+function Show(servantId)
+    if servantId then
+        for index, servant in ipairs(GetLoadout():GetOwned()) do
+            if servant.id == servantId then
+                selectedIndex = index
+                break
+            end
+        end
+    end
+    GetCanvas().enabled = true
+    Refresh()
+end
+
+function Hide()
+    GetCanvas().enabled = false
+end

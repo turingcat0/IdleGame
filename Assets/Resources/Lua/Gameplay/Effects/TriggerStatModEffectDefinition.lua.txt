@@ -1,0 +1,80 @@
+local EffectDefinition = require("Gameplay.Effects.EffectDefinition")
+local Modifier = require("Gameplay.Stats.Modifier")
+local EventSystem = require("Event.EventSystem")
+local EventType = require("Event.EventType")
+
+---@class TriggerStatModEffectDefinition : EffectDefinition 事件驱动的自身属性 buff
+---@field attributeType AttributeType
+---@field modifierType ModifierType
+---@field trigger string always（挂上就满额生效）| onHit（自己命中时叠层）| onHealed（自己被治疗时叠层）
+---@field value number 每层的数值
+local TriggerStatModEffectDefinition = EffectDefinition:extend()
+
+---@param id string
+---@param config table
+function TriggerStatModEffectDefinition:New(id, config)
+    TriggerStatModEffectDefinition.super.New(self, id, config)
+    self.attributeType = config.attribute
+    self.modifierType = config.modifierType
+    self.trigger = config.trigger
+    self.value = config.value
+end
+
+---按当前层数重挂 modifier。
+---definition 在 EffectFactory 里是全局单例，所以层数只能存在每个实例自己的 params 里
+---@param definition TriggerStatModEffectDefinition
+---@param target Entity
+---@param params table
+local function ApplyStacks(definition, target, params)
+    local attribute = target.attributes[definition.attributeType]
+    attribute:RemoveModifier(definition.id)
+    if params.stacks > 0 then
+        attribute:AddModifier(definition.id, Modifier(definition.modifierType, definition.value * params.stacks))
+    end
+end
+
+---@param target Entity
+---@param source Entity?
+---@param params table?
+function TriggerStatModEffectDefinition:OnApply(target, source, params)
+    params.stacks = self.trigger == "always" and 1 or 0
+    ApplyStacks(self, target, params)
+
+    if self.trigger == "onHit" then
+        --- SkillHit 是以被击中者为 key 触发的，攻击方听不到自己的命中，
+        --- 所以注册成全局监听（target 传 nil），回调里再认出是不是自己打的
+        params.listener = function(hitTarget, hitSource, skill)
+            if hitSource == target then
+                params.stacks = math.min(params.stacks + 1, self.maxStacks)
+                ApplyStacks(self, target, params)
+            end
+        end
+        EventSystem:RegisterListener(EventType.SkillHit, nil, nil, params.listener)
+
+    elseif self.trigger == "onHealed" then
+        params.listener = function(oldHealth, newHealth)
+            if newHealth > oldHealth then
+                params.stacks = math.min(params.stacks + 1, self.maxStacks)
+                ApplyStacks(self, target, params)
+            end
+        end
+        EventSystem:RegisterListener(EventType.HealthChanged, target, nil, params.listener)
+    end
+end
+
+---@param target Entity
+---@param source Entity?
+---@param params table?
+function TriggerStatModEffectDefinition:OnExpire(target, source, params)
+    if params.listener then
+        if self.trigger == "onHit" then
+            EventSystem:RemoveListener(EventType.SkillHit, nil, nil, params.listener)
+        else
+            EventSystem:RemoveListener(EventType.HealthChanged, target, nil, params.listener)
+        end
+        params.listener = nil
+    end
+    target.attributes[self.attributeType]:RemoveModifier(self.id)
+end
+
+return TriggerStatModEffectDefinition

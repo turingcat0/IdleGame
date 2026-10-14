@@ -1,0 +1,37 @@
+local EffectDefinition = require("Gameplay.Effects.EffectDefinition")
+local Modifier = require("Gameplay.Stats.Modifier")
+
+---@class StatModEffectDefinition : EffectDefinition
+---@field attributeType AttributeType
+---@field modifierType ModifierType
+local StatModEffectDefinition = EffectDefinition:extend()
+
+---@param id string
+---@param config table
+function StatModEffectDefinition:New(id, config)
+    StatModEffectDefinition.super.New(self, id, config)
+    self.attributeType = config.attribute
+    self.modifierType = config.modifierType
+end
+
+---@param target Entity
+---@param source Entity?
+---@param params table?
+function StatModEffectDefinition:OnApply(target, source, params)
+    local attr = target.attributes[self.attributeType]
+    if attr then
+        attr:AddModifier(self.id, Modifier(self.modifierType, params.value or 0))
+    end
+end
+
+---@param target Entity
+---@param source Entity?
+---@param params table?
+function StatModEffectDefinition:OnExpire(target, source, params)
+    local attr = target.attributes[self.attributeType]
+    if attr then
+        attr:RemoveModifier(self.id)
+    end
+end
+
+return StatModEffectDefinition

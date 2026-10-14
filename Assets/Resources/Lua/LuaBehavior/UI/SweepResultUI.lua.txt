@@ -1,0 +1,116 @@
+local GameManager = require("GameManager")
+local EventSystem = require("Event.EventSystem")
+local EventType   = require("Event.EventType")
+
+--- 扫荡结果面板：监听 DungeonSwept 事件，显示奖励，确定后发放 boss 装备
+--- 节点结构（手工搭）：
+--- SweepResultUI (Canvas/CanvasGroup + LuaBehaviour)
+--- ├ Background           (Image 全屏底)
+--- └ Panel                (Image 结果面板)
+---    ├ Frame/Title        (Title TMP：扫荡结果)
+---    ├ ConfirmButton/Text (Button)
+---    ├ CrystalSlot/{Frame,Icon,Count} (水晶：Count TMP)
+---    ├ CoinSlot/{Frame,Icon,Count}    (金币：Count TMP)
+---    ├ ArmorSlot/{Frame,Icon}          (Boss 掉落装备：Icon 运行时按 item.id 加载 Textures/<id>)
+---    └ ExpLabel/{Number}               (获得经验：Number TMP)
+
+---@type CS.UnityEngine.MonoBehaviour
+local self = self
+
+local canvasGroup = nil
+local expNumber = nil
+local crystalCount = nil
+local coinCount = nil
+local armorIcon = nil
+local confirmButton = nil
+local pendingBossItem = nil
+
+function Start()
+    canvasGroup = self.gameObject:GetComponent(typeof(CS.UnityEngine.CanvasGroup))
+
+    local function FindTmp(path)
+        local tf = self.transform:Find(path)
+        if not tf then return nil end
+        return tf:GetComponent(typeof(CS.TMPro.TextMeshProUGUI))
+    end
+    local function FindImage(path)
+        local tf = self.transform:Find(path)
+        if not tf then return nil end
+        return tf:GetComponent(typeof(CS.UnityEngine.UI.Image))
+    end
+
+    expNumber    = FindTmp("Panel/ExpLabel/Number")
+    crystalCount = FindTmp("Panel/CrystalSlot/Count")
+    coinCount    = FindTmp("Panel/CoinSlot/Count")
+    armorIcon    = FindImage("Panel/ArmorSlot/Icon")
+
+    local btnTf = self.transform:Find("Panel/ConfirmButton")
+    if btnTf then
+        confirmButton = btnTf:GetComponent(typeof(CS.UnityEngine.UI.Button))
+    end
+    if confirmButton then
+        confirmButton.onClick:AddListener(OnConfirmClicked)
+    end
+
+    --- 初始隐藏
+    if canvasGroup then
+        canvasGroup.alpha = 0
+        canvasGroup.interactable = false
+        canvasGroup.blocksRaycasts = false
+    end
+
+    --- 注册 DungeonSwept 事件监听（wildcard：target=nil → EventSystem 自身）
+    EventSystem:RegisterListener(EventType.DungeonSwept, nil, nil, OnDungeonSwept)
+end
+
+---DungeonSwept 事件回调：object=nil 时 listener 被直接调用，参数 = payload
+---@param payload table {stageId=, exp=, crystal=, coins=, bossItem=ItemInstance?}
+function OnDungeonSwept(payload)
+    if not payload then return end
+    pendingBossItem = payload.bossItem
+
+    if expNumber then expNumber.text = tostring(payload.exp) end
+    if crystalCount then crystalCount.text = tostring(payload.crystal) end
+    if coinCount then coinCount.text = tostring(payload.coins) end
+    if armorIcon then
+        if payload.bossItem then
+            local sprite = CS.UnityEngine.Resources.Load("Textures/" .. payload.bossItem.item.id, typeof(CS.UnityEngine.Sprite))
+            if sprite then
+                armorIcon.sprite = sprite
+                armorIcon.enabled = true
+            else
+                armorIcon.enabled = false
+            end
+        else
+            armorIcon.enabled = false
+        end
+    end
+
+    if canvasGroup then
+        canvasGroup.alpha = 1
+        canvasGroup.interactable = true
+        canvasGroup.blocksRaycasts = true
+    end
+end
+
+function OnConfirmClicked()
+    if pendingBossItem then
+        local dm = GameManager.dungeonManager
+        if dm then
+            dm:GrantBossItem(pendingBossItem)
+        end
+    end
+    pendingBossItem = nil
+    if canvasGroup then
+        canvasGroup.alpha = 0
+        canvasGroup.interactable = false
+        canvasGroup.blocksRaycasts = false
+    end
+end
+
+function OnDestroy()
+    if confirmButton then
+        confirmButton.onClick:RemoveListener(OnConfirmClicked)
+    end
+    EventSystem:RemoveListener(EventType.DungeonSwept, nil, nil, OnDungeonSwept)
+end

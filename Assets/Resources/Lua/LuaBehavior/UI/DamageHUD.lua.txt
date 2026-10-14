@@ -1,0 +1,27 @@
+---@type CS.UnityEngine.GameObject
+local self = self
+
+local fadeOutTime = 1
+local fadeOutY = 0.3
+local fadeOutStartTime
+
+
+local position
+---@type CS.TMPro.TMP_Text
+local tmp
+function Start()
+    fadeOutStartTime = CS.UnityEngine.Time.time
+    position = self.transform.position
+    tmp = self:GetComponent(typeof(CS.TMPro.TMP_Text))
+
+end
+
+function Update()
+    local pastTime = math.min((CS.UnityEngine.Time.time - fadeOutStartTime), 1)
+    self.transform.position = CS.UnityEngine.Vector3(position.x, position.y + ((pastTime / fadeOutTime) ^ 0.5) * fadeOutY, position.z)
+    tmp.color = CS.UnityEngine.Color(tmp.color.r, tmp.color.g, tmp.color.b, 1 - ((pastTime / fadeOutTime) ^ 0.5))
+
+    if pastTime >= 0.99 then
+        CS.UnityEngine.Object.Destroy(self.gameObject)
+    end
+end

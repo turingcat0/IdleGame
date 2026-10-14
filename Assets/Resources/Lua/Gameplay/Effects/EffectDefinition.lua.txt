@@ -1,0 +1,75 @@
+local Object = require("Utils.classic")
+
+---@class EffectDefinition 效果定义/原型，包含效果逻辑
+---@field id string           效果 id
+---@field type string         效果类型
+---@field substate integer    控制 exclusiveSubstate 的值，0 表示不控制
+---@field stackable boolean   是否可叠层
+---@field maxStacks integer   最大叠层
+local EffectDefinition = Object:extend()
+
+---@param id string
+---@param config table
+function EffectDefinition:New(id, config)
+    self.id = id
+    self.type = config.type
+    self.substate = config.substate or 0
+    self.stackable = config.stackable or false
+    self.maxStacks = config.maxStacks or 1
+end
+
+---效果被添加时调用
+---@param target Entity
+---@param source Entity?
+---@param params table?
+function EffectDefinition:OnApply(target, source, params)
+end
+
+---拥有者每帧更新时调用
+---@param target Entity
+---@param source Entity?
+---@param params table?
+---@param deltaTime number
+function EffectDefinition:OnUpdate(target, source, params, deltaTime)
+end
+
+---效果失效时调用
+---@param target Entity
+---@param source Entity?
+---@param params table?
+function EffectDefinition:OnExpire(target, source, params)
+end
+
+---伤害 pipeline：修改原始伤害（在 Mitigate 之前）
+---@param target Entity
+---@param source Entity?
+---@param params table?
+---@param ctx DamageContext
+function EffectDefinition:OnModifyDamage(target, source, params, ctx)
+end
+
+---伤害 pipeline：参与减伤计算（Mitigate 阶段）
+---@param target Entity
+---@param source Entity?
+---@param params table?
+---@param ctx DamageContext
+function EffectDefinition:OnMitigateDamage(target, source, params, ctx)
+end
+
+---伤害 pipeline：拦截/吸收伤害（Mitigate 之后、Apply 之前）
+---@param target Entity
+---@param source Entity?
+---@param params table?
+---@param ctx DamageContext
+function EffectDefinition:OnInterceptDamage(target, source, params, ctx)
+end
+
+---伤害 pipeline：命中后回调（Apply 之后）
+---@param target Entity
+---@param source Entity?
+---@param params table?
+---@param ctx DamageContext
+function EffectDefinition:OnPostDamage(target, source, params, ctx)
+end
+
+return EffectDefinition

@@ -1,0 +1,71 @@
+local utils = require("Utils.utils")
+local EventSystem = require("Event.EventSystem")
+local EventType = require("Event.EventType")
+
+---@type CS.UnityEngine.GameObject
+local self = self
+
+---抛射物是纯表现对象：只认注入进来的 record，不持有 model 引用、不认 GameManager。
+---命中的目标是它自己撞上后从 collider 反查出来、再通过 record.onHit 交回战斗层结算的。
+local record = nil
+local startX = 0
+local maxRange = 0
+local resolved = false
+---@type CS.UnityEngine.SpriteRenderer
+local spriteRenderer = nil
+
+local function OnWorldWrap(delta)
+    local t = self.gameObject.transform
+    local p = t.position
+    t.position = CS.UnityEngine.Vector3(p.x + delta, p.y, p.z)
+    startX = startX + delta
+end
+
+---@param rec table {source, damage, crit, faction, direction, speed, onHit}
+---@param range number
+function Init(rec, range)
+    record = rec
+    maxRange = range
+    startX = self.gameObject.transform.position.x
+    -- 优先取自身或子节点上的 SpriteRenderer，用于根据飞行方向翻转
+    spriteRenderer = self.gameObject:GetComponentInChildren(typeof(CS.UnityEngine.SpriteRenderer))
+    EventSystem:RegisterListener(EventType.PlayerReachedBorder, nil, nil, OnWorldWrap)
+end
+
+function Update()
+    if not record then return end
+    local t = self.gameObject.transform
+    local delta = record.speed * record.direction * CS.UnityEngine.Time.deltaTime
+    t.position = CS.UnityEngine.Vector3(t.position.x + delta, t.position.y, t.position.z)
+
+    -- 根据速度方向翻转 Sprite：假设原图朝右，速度为负（向左飞）时 flipX=true
+    if spriteRenderer and delta ~= 0 then
+        spriteRenderer.flipX = (delta < 0)
+    end
+
+    if math.abs(t.position.x - startX) > maxRange then
+        CS.UnityEngine.Object.Destroy(self.gameObject)
+    end
+end
+
+---@param collider CS.UnityEngine.Collider2D
+function OnTriggerEnter2D(collider)
+    if not record or resolved then return end
+
+    local lb = collider.gameObject:GetComponent(typeof(CS.LuaBehaviour))
+    if not lb then return end
+    -- 只有暴露了 GetEntity 的对象（敌人 / 玩家）才是有效目标；掉落物、别的抛射物没有这个函数，直接跳过
+    local getEntity = lb.scriptEnv.GetEntity
+    if not getEntity then return end
+
+    local entity = getEntity()
+    if entity and not entity:IsDead() and utils.Contains(entity.tags, record.faction) then
+        resolved = true
+        record.onHit(entity)
+        CS.UnityEngine.Object.Destroy(self.gameObject)
+    end
+end
+
+function OnDestroy()
+    EventSystem:RemoveListener(EventType.PlayerReachedBorder, nil, nil, OnWorldWrap)
+end

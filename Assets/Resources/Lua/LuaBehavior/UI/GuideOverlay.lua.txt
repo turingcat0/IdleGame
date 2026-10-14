@@ -1,0 +1,188 @@
+---引导遮罩层：用上下左右四块 Image 围出一个矩形空洞，只露出当前引导目标。
+---空洞处没有 Image，点击会自然穿透到下面真正的按钮上，因此不需要改动任何被引导的面板。
+---@type CS.UnityEngine.MonoBehaviour
+local self = self
+
+local Vector2 = CS.UnityEngine.Vector2
+local Vector3 = CS.UnityEngine.Vector3
+local RectTransformType = typeof(CS.UnityEngine.RectTransform)
+
+---调试用：非 nil 时 Start 后直接对这个名字的 GameObject 演示一次。
+---验收完置为 nil，正式流程由 GuideManager 调 Show/Hide 驱动。
+local DEBUG_ANCHOR_NAME = nil
+
+---空洞四周比目标各放大多少（画布单位）
+local HOLE_PADDING = 6
+---气泡与空洞的间距
+local BUBBLE_GAP = 12
+
+---@type CS.UnityEngine.Canvas
+local canvas
+---@type CS.UnityEngine.RectTransform 画布根，所有坐标都换算到它的局部空间
+local rootRect
+---@type CS.UnityEngine.RectTransform[] 顺序：上、下、左、右
+local quads = {}
+---@type CS.UnityEngine.RectTransform
+local bubbleRect
+---@type CS.TMPro.TMP_Text
+local bubbleText
+---@type CS.UnityEngine.UI.Button
+local skipButton
+
+---@type CS.UnityEngine.RectTransform 当前高亮目标，nil 表示没在引导
+local targetRect = nil
+
+---外部（GuideManager）设置的跳过回调
+OnSkipRequested = nil
+
+---把一个矩形区域套到 RectTransform 上。x0/y0/x1/y1 都是 rootRect 局部坐标。
+---@param rt CS.UnityEngine.RectTransform
+local function SetQuad(rt, x0, y0, x1, y1)
+    local w = math.max(0, x1 - x0)
+    local h = math.max(0, y1 - y0)
+    rt.sizeDelta = Vector2(w, h)
+    rt.anchoredPosition = Vector2((x0 + x1) * 0.5, (y0 + y1) * 0.5)
+end
+
+---按当前目标重算四块遮罩和气泡的位置。
+---每帧都要调：目标可能在滚动列表里、或有入场动画，位置会变。
+local function Layout()
+    -- 用 TransformPoint 把目标 rect 的两个对角换算到世界坐标，
+    -- 再用 InverseTransformPoint 落到画布根的局部坐标。
+    -- 这样自动吃掉两个 Canvas 之间的缩放差异，也不必碰 Vector3[] 数组。
+    local r = targetRect.rect
+    local cornerA = rootRect:InverseTransformPoint(targetRect:TransformPoint(Vector3(r.xMin, r.yMin, 0)))
+    local cornerB = rootRect:InverseTransformPoint(targetRect:TransformPoint(Vector3(r.xMax, r.yMax, 0)))
+
+    local rootR = rootRect.rect
+    local hw = rootR.width * 0.5
+    local hh = rootR.height * 0.5
+
+    local left   = math.min(cornerA.x, cornerB.x) - HOLE_PADDING
+    local right  = math.max(cornerA.x, cornerB.x) + HOLE_PADDING
+    local bottom = math.min(cornerA.y, cornerB.y) - HOLE_PADDING
+    local top    = math.max(cornerA.y, cornerB.y) + HOLE_PADDING
+
+    -- 目标可能整体或部分在画布外，夹回画布内，避免算出负尺寸或洞漏到屏幕外
+    left   = math.max(left, -hw)
+    right  = math.min(right, hw)
+    bottom = math.max(bottom, -hh)
+    top    = math.min(top, hh)
+
+    -- 上下两块通宽，左右两块只占空洞那条横带，四块正好无缝无重叠
+    SetQuad(quads[1], -hw, top, hw, hh)
+    SetQuad(quads[2], -hw, -hh, hw, bottom)
+    SetQuad(quads[3], -hw, bottom, left, top)
+    SetQuad(quads[4], right, bottom, hw, top)
+
+    -- 气泡默认摆在洞下方，下方装不下就翻到上方
+    local bw = bubbleRect.rect.width
+    local bh = bubbleRect.rect.height
+    local by
+    if bottom - BUBBLE_GAP - bh >= -hh then
+        by = bottom - BUBBLE_GAP - bh * 0.5
+    else
+        by = top + BUBBLE_GAP + bh * 0.5
+    end
+    -- 横向跟着洞中心，但不许探出画布
+    local bx = (left + right) * 0.5
+    bx = math.max(-hw + bw * 0.5, math.min(hw - bw * 0.5, bx))
+    bubbleRect.anchoredPosition = Vector2(bx, by)
+end
+
+---显示引导：高亮 anchorTransform，气泡里写 text
+---@param anchorTransform CS.UnityEngine.Transform
+---@param text string
+function Show(anchorTransform, text)
+    if not anchorTransform then
+        print("[GuideOverlay] Show 收到空锚点，跳过本步")
+        Hide()
+        return
+    end
+
+    local rect = anchorTransform:GetComponent(RectTransformType)
+    if not rect then
+        print("[GuideOverlay] 锚点没有 RectTransform，不是 UI 元素：" .. anchorTransform.name)
+        Hide()
+        return
+    end
+
+    targetRect = rect
+    bubbleText:SetText(text or "")
+    canvas.enabled = true
+    Layout()
+end
+
+---收起引导
+function Hide()
+    targetRect = nil
+    canvas.enabled = false
+end
+
+---当前是否正在引导
+---@return boolean
+function IsShowing()
+    return targetRect ~= nil
+end
+
+function OnSkipClicked()
+    Hide()
+    if OnSkipRequested then
+        OnSkipRequested()
+    end
+end
+
+---GuideManager 用这个挂跳过回调
+---@param handler function
+function SetSkipHandler(handler)
+    OnSkipRequested = handler
+end
+
+function Start()
+    canvas = self.gameObject:GetComponent(typeof(CS.UnityEngine.Canvas))
+    rootRect = self.gameObject:GetComponent(RectTransformType)
+
+    quads[1] = self.transform:Find("MaskTop"):GetComponent(RectTransformType)
+    quads[2] = self.transform:Find("MaskBottom"):GetComponent(RectTransformType)
+    quads[3] = self.transform:Find("MaskLeft"):GetComponent(RectTransformType)
+    quads[4] = self.transform:Find("MaskRight"):GetComponent(RectTransformType)
+
+    bubbleRect = self.transform:Find("Bubble"):GetComponent(RectTransformType)
+    bubbleText = self.transform:Find("Bubble/Text"):GetComponent(typeof(CS.TMPro.TMP_Text))
+    skipButton = self.transform:Find("SkipButton"):GetComponent(typeof(CS.UnityEngine.UI.Button))
+
+    -- 四块和气泡的锚点统一钉到中心，这样 anchoredPosition/sizeDelta 就是直接的中心坐标和尺寸，
+    -- 不依赖 Inspector 里怎么摆，少一类"节点搭错"的问题
+    local center = Vector2(0.5, 0.5)
+    for i = 1, 4 do
+        quads[i].anchorMin = center
+        quads[i].anchorMax = center
+        quads[i].pivot = center
+    end
+    bubbleRect.anchorMin = center
+    bubbleRect.anchorMax = center
+    bubbleRect.pivot = center
+
+    skipButton.onClick:AddListener(OnSkipClicked)
+
+    Hide()
+
+    if DEBUG_ANCHOR_NAME then
+        local go = CS.UnityEngine.GameObject.Find(DEBUG_ANCHOR_NAME)
+        if go then
+            Show(go.transform, "这里是攻击按钮，点它开始战斗")
+        else
+            print("[GuideOverlay] 调试锚点找不到（注意 GameObject.Find 找不到未激活对象）：" .. DEBUG_ANCHOR_NAME)
+        end
+    end
+end
+
+function Update()
+    if targetRect then
+        Layout()
+    end
+end
+
+function OnDestroy()
+    skipButton.onClick:RemoveListener(OnSkipClicked)
+end

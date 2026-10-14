@@ -1,0 +1,42 @@
+local Object = require("Utils.classic")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+
+---@class DamageContext 一次命中的伤害上下文
+---@field source Entity     攻击者
+---@field target Entity     受击者
+---@field skill Skill?      来源技能，nil 表示非技能伤害
+---@field crit boolean      是否暴击
+---@field amount number     当前伤害值，各阶段会被效果改写
+---@field rawAmount number  减伤前的原始伤害，只读，用于飘字/统计
+---@field absorbed number   被护盾/拦截效果吸收的伤害量
+---@field intercepted boolean 是否被完全拦截（不再扣血）
+---@field finalAmount number 最终实际扣血值（Apply 阶段写入）
+---@field aoeRange number    命中后以此目标为圆心的溅射半径，0 表示不溅射
+local DamageContext = Object:extend()
+
+---@param source Entity
+---@param target Entity
+---@param skill Skill?
+---@param amount number
+---@param crit boolean
+---@param aoeRange number? 命中点溅射半径，省略时按 skill 的 AoERange 属性取
+function DamageContext:New(source, target, skill, amount, crit, aoeRange)
+    self.source      = source
+    self.target      = target
+    self.skill       = skill
+    self.crit        = crit or false
+    self.amount      = amount
+    self.rawAmount   = amount
+    self.absorbed    = 0
+    self.intercepted = false
+    self.finalAmount = 0
+    if aoeRange then
+        self.aoeRange = aoeRange
+    elseif skill then
+        self.aoeRange = skill:Get(AttributeType.AoERange)
+    else
+        self.aoeRange = 0
+    end
+end
+
+return DamageContext

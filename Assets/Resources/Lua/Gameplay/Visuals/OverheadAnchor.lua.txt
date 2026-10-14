@@ -1,0 +1,75 @@
+local Object = require("Utils.classic")
+local SpriteBounds = require("Config.Generated.SpriteBounds")
+
+---世界单位空隙：等于血条自身粗细（0.02 × 6 = 0.12）
+local GAP = 0.18
+
+---@class OverheadAnchor 将 Canvas 锚定到 SpriteRenderer 当前帧的真实视觉顶边
+---@field renderer CS.UnityEngine.SpriteRenderer
+---@field anchorTransform CS.UnityEngine.Transform
+---@field ownerTransform CS.UnityEngine.Transform
+---@field lastSprite CS.UnityEngine.Sprite?
+---@field cachedTopY number
+---@field cachedCenterX number
+---@field warned boolean
+local OverheadAnchor = Object:extend()
+
+---@param renderer CS.UnityEngine.SpriteRenderer
+---@param anchorTransform CS.UnityEngine.Transform
+---@param ownerTransform CS.UnityEngine.Transform
+function OverheadAnchor:New(renderer, anchorTransform, ownerTransform)
+    self.renderer = renderer
+    self.anchorTransform = anchorTransform
+    self.ownerTransform = ownerTransform
+    self.lastSprite = nil
+    self.cachedTopY = 0
+    self.cachedCenterX = 0
+    self.warned = false
+end
+
+function OverheadAnchor:OnUpdate()
+    local sprite = self.renderer.sprite
+    if not sprite then return end
+
+    -- 相同 sprite 跳过查表，一帧动画会持续多个 Update
+    if self.lastSprite ~= sprite then
+        self.lastSprite = sprite
+
+        local entry = SpriteBounds[sprite.name]
+        if entry then
+            self.cachedTopY = entry.topY
+            self.cachedCenterX = entry.centerX
+        else
+            -- 退化：用 renderer.bounds 估算（退化但不崩）
+            if not self.warned then
+                self.warned = true
+                print(string.format(
+                    "[OverheadAnchor] No SpriteBounds entry for '%s', falling back to renderer.bounds",
+                    sprite.name))
+            end
+            local b = self.renderer.bounds
+            local scale = self.ownerTransform.lossyScale
+            local ownerPos = self.ownerTransform.position
+            self.cachedTopY = (b.center.y + b.extents.y - ownerPos.y) / scale.y
+            self.cachedCenterX = (b.center.x - ownerPos.x) / scale.x
+        end
+    end
+
+    -- 每帧更新位置（宿主会移动）
+    local scale = self.ownerTransform.lossyScale
+    local ownerPos = self.ownerTransform.position
+    local cx = self.cachedCenterX
+    if self.renderer.flipX then
+        cx = -cx
+    end
+
+    local worldX = ownerPos.x + cx * scale.x
+    local worldTop = ownerPos.y + self.cachedTopY * scale.y
+
+    self.anchorTransform.position = CS.UnityEngine.Vector3(
+        worldX,
+        worldTop + GAP,
+        self.anchorTransform.position.z)
+end
+
+return OverheadAnchor

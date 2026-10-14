@@ -1,0 +1,67 @@
+local GameManager = require("GameManager")
+local StageState = require("Gameplay.StageState")
+
+--- 副本死亡面板：检测 DungeonFailed 状态，显示返回按钮
+--- 节点结构（手工搭）：
+--- DungeonDeathUI (Canvas/CanvasGroup + LuaBehaviour)
+--- ├ Background (Image 全屏底)
+--- └ Panel (Image 面板)
+---    ├ Frame/Title (Title TMP：挑战失败)
+---    ├ ReturnButton/Text (Button)
+---    └ Skull (Image)
+
+---@type CS.UnityEngine.MonoBehaviour
+local self = self
+
+local canvasGroup = nil
+local returnButton = nil
+
+function Start()
+    canvasGroup = self.gameObject:GetComponent(typeof(CS.UnityEngine.CanvasGroup))
+
+    local btnTf = self.transform:Find("Panel/ReturnButton")
+    if btnTf then
+        returnButton = btnTf:GetComponent(typeof(CS.UnityEngine.UI.Button))
+    end
+    if returnButton then
+        returnButton.onClick:AddListener(OnReturnClicked)
+    end
+end
+
+function Update()
+    local lm = GameManager.levelManager
+    if lm and lm.state == StageState.DungeonFailed then
+        if canvasGroup then
+            canvasGroup.alpha = 1
+            canvasGroup.interactable = true
+            canvasGroup.blocksRaycasts = true
+        end
+    else
+        if canvasGroup then
+            canvasGroup.alpha = 0
+            canvasGroup.interactable = false
+            canvasGroup.blocksRaycasts = false
+        end
+    end
+end
+
+function OnReturnClicked()
+    local lm = GameManager.levelManager
+    if lm then
+        lm:AbortDungeon()
+    end
+    --- 打开副本选择窗口
+    local windowGo = CS.UnityEngine.GameObject.Find("DungeonWindow")
+    if windowGo then
+        local lb = windowGo:GetComponent(typeof(CS.LuaBehaviour))
+        if lb and lb.scriptEnv then
+            lb.scriptEnv.Show()
+        end
+    end
+end
+
+function OnDestroy()
+    if returnButton then
+        returnButton.onClick:RemoveListener(OnReturnClicked)
+    end
+end

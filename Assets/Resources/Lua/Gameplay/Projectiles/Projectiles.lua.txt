@@ -1,0 +1,24 @@
+local Projectile = require("Gameplay.Projectiles.Projectile")
+local ProjectileConfigs = require("Config.Generated.Projectiles")
+
+---@class Projectiles
+---@field projectiles Projectile[]
+local Projectiles = {
+    projectiles = {}
+}
+
+---@param id string
+---@param name string
+---@param speed number
+---@return Projectile
+function Projectiles:Register(id, name, speed)
+    local projectile = Projectile(id, name, speed)
+    table.insert(self.projectiles, projectile)
+    return projectile
+end
+
+for id, config in pairs(ProjectileConfigs) do
+    Projectiles[id] = Projectiles:Register(id, config.name, config.speed)
+end
+
+return Projectiles

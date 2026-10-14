@@ -1,0 +1,87 @@
+local Object = require("Utils.classic")
+local EventSystem = require("Event.EventSystem")
+
+---@class BuffIconSlot
+---@field go CS.UnityEngine.GameObject
+---@field stackText CS.TMPro.TMP_Text
+---@field cooldown CS.UnityEngine.UI.Image
+---@field effect EffectInstance
+
+---@class BuffBarView 通用 buff 图标栏
+---玩家和敌人共用同一份逻辑，只是容器和 prefab 不同。
+---@field container CS.UnityEngine.Transform
+---@field iconPrefab CS.UnityEngine.GameObject
+---@field entity Entity
+---@field slots table<string, BuffIconSlot>  key = effect.definition.id
+local BuffBarView = Object:extend()
+
+---@param container CS.UnityEngine.Transform
+---@param iconPrefab CS.UnityEngine.GameObject
+---@param entity Entity
+function BuffBarView:New(container, iconPrefab, entity)
+    self.container = container
+    self.iconPrefab = iconPrefab
+    self.entity = entity
+    self.slots = {}
+    EventSystem:RegisterEffectAddedListener(entity, self, BuffBarView.OnEffectAdded)
+    EventSystem:RegisterEffectRemovedListener(entity, self, BuffBarView.OnEffectRemoved)
+    EventSystem:RegisterEffectStackChangedListener(entity, self, BuffBarView.OnEffectStackChanged)
+end
+
+---@param effect EffectInstance
+function BuffBarView:OnEffectAdded(effect)
+    local id = effect.definition.id
+    if self.slots[id] then return end
+
+    local go = CS.UnityEngine.Object.Instantiate(self.iconPrefab, self.container)
+    local icon = go.transform:Find("Icon"):GetComponent(typeof(CS.UnityEngine.UI.Image))
+    icon.sprite = CS.UnityEngine.Resources.Load("Textures/Buffs/"..id, typeof(CS.UnityEngine.Sprite))
+
+    local stackText = go.transform:Find("StackText"):GetComponent(typeof(CS.TMPro.TMP_Text))
+    local cooldown = go.transform:Find("Cooldown"):GetComponent(typeof(CS.UnityEngine.UI.Image))
+    cooldown.type = CS.UnityEngine.UI.Image.Type.Filled
+    cooldown.fillMethod = CS.UnityEngine.UI.Image.FillMethod.Radial360
+
+    self.slots[id] = { go = go, stackText = stackText, cooldown = cooldown, effect = effect }
+    stackText.text = effect.stacks > 1 and tostring(effect.stacks) or ""
+end
+
+---@param effect EffectInstance
+function BuffBarView:OnEffectRemoved(effect)
+    local id = effect.definition.id
+    local slot = self.slots[id]
+    if not slot then return end
+    CS.UnityEngine.Object.Destroy(slot.go)
+    self.slots[id] = nil
+end
+
+---@param effect EffectInstance
+---@param oldStacks number
+---@param newStacks number
+function BuffBarView:OnEffectStackChanged(effect, oldStacks, newStacks)
+    local slot = self.slots[effect.definition.id]
+    if not slot then return end
+    slot.stackText.text = newStacks > 1 and tostring(newStacks) or ""
+end
+
+function BuffBarView:OnUpdate()
+    for _, slot in pairs(self.slots) do
+        local effect = slot.effect
+        if effect.duration and effect.duration > 0 then
+            local progress = math.max(0, math.min(1, effect.remaining / effect.duration))
+            slot.cooldown.fillAmount = 1 - progress
+        end
+    end
+end
+
+function BuffBarView:Dispose()
+    EventSystem:RemoveEffectAddedListener(self.entity, self, BuffBarView.OnEffectAdded)
+    EventSystem:RemoveEffectRemovedListener(self.entity, self, BuffBarView.OnEffectRemoved)
+    EventSystem:RemoveEffectStackChangedListener(self.entity, self, BuffBarView.OnEffectStackChanged)
+    for _, slot in pairs(self.slots) do
+        CS.UnityEngine.Object.Destroy(slot.go)
+    end
+    self.slots = {}
+end
+
+return BuffBarView

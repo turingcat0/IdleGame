@@ -1,0 +1,131 @@
+local Object = require("Utils.classic")
+local EventSystem = require("Event.EventSystem")
+local EventType   = require("Event.EventType")
+
+---这个游戏里除了装备栏之外有三种消耗素材：金币、水晶、精魄
+---@class PlayerInventory 玩家背包
+---@field coins integer 金币
+---@field crystals integer 水晶，装备分解产物
+---@field essence integer 精魄，随从升级专用材料
+---@field slots table<EquipmentSlot, ItemInstance?>
+local PlayerInventory = Object:extend()
+
+function PlayerInventory:New(player)
+    self.player = player
+    self.coins = 100
+    self.crystals = 100
+    self.essence = 50
+    self.slots = {}
+end
+
+---消费金币
+---@param coins integer
+---@return boolean 消费是否成功
+function PlayerInventory:SpendCoins(coins)
+    if self.coins >= coins then
+        local oldValue = self.coins
+        self.coins = self.coins - coins
+        EventSystem:FireEvent(EventType.CoinChanged, self, oldValue, self.coins)
+        return true
+    end
+    return false
+end
+
+---获得金币
+---@param coins integer
+function PlayerInventory:AddCoins(coins)
+    local oldValue = self.coins
+    self.coins = self.coins + coins
+    EventSystem:FireEvent(EventType.CoinChanged, self, oldValue, self.coins)
+end
+
+---消费水晶
+---@param crystals integer
+---@return boolean 消费是否成功
+function PlayerInventory:SpendCrystal(crystals)
+    if self.crystals >= crystals then
+        local oldValue = self.crystals
+        self.crystals = self.crystals - crystals
+        EventSystem:FireEvent(EventType.CrystalChanged, self, oldValue, self.crystals)
+        return true
+    end
+    return false
+end
+
+---获得水晶
+---@param crystals integer
+function PlayerInventory:AddCrystal(crystals)
+    local oldValue = self.crystals
+    self.crystals = self.crystals + crystals
+    EventSystem:FireEvent(EventType.CrystalChanged, self, oldValue, self.crystals)
+end
+
+---消费精魄
+---@param essence integer
+---@return boolean 消费是否成功
+function PlayerInventory:SpendEssence(essence)
+    if self.essence >= essence then
+        local oldValue = self.essence
+        self.essence = self.essence - essence
+        EventSystem:FireEvent(EventType.EssenceChanged, self, oldValue, self.essence)
+        return true
+    end
+    return false
+end
+
+---获得精魄
+---@param essence integer
+function PlayerInventory:AddEssence(essence)
+    local oldValue = self.essence
+    self.essence = self.essence + essence
+    EventSystem:FireEvent(EventType.EssenceChanged, self, oldValue, self.essence)
+end
+
+---分解装备实例，获得水晶
+---@param itemInstance ItemInstance
+---@return integer 获得的水晶数量
+function PlayerInventory:DecomposeItem(itemInstance)
+    local crystals = itemInstance:Dismantle()
+    self:AddCrystal(crystals)
+    return crystals
+end
+
+---获取某个槽位的装备
+---@param equipmentSlot EquipmentSlot?
+---@return ItemInstance
+function PlayerInventory:GetSlot(equipmentSlot)
+    return self.slots[equipmentSlot]
+end
+
+---
+---@param itemInstance ItemInstance
+function PlayerInventory:Equip(itemInstance)
+    self:TrySetSlot(itemInstance.item.equipmentSlot, itemInstance)
+end
+
+---设置某个槽位的装备
+---@param equipmentSlot EquipmentSlot
+---@param itemInstance ItemInstance?
+---@return boolean 是否设置成功
+function PlayerInventory:TrySetSlot(equipmentSlot, itemInstance)
+    if not itemInstance or itemInstance.item.equipmentSlot == equipmentSlot then
+        local oldEquipment = self:GetSlot(equipmentSlot)
+        if oldEquipment then
+            oldEquipment:OnUnequipped()
+        end
+        if equipmentSlot == nil then
+            print("nil")
+        end
+        self.slots[equipmentSlot] = itemInstance
+        if itemInstance then
+            itemInstance:OnEquipped()
+        end
+        EventSystem:FireEquipmentChangedEvent(self, self.player, equipmentSlot, oldEquipment, itemInstance)
+        return true
+    end
+    return false
+end
+
+
+
+return PlayerInventory

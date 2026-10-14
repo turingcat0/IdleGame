@@ -1,0 +1,11 @@
+
+
+function Awake()
+
+    local GameManager = require("GameManager")
+end
+
+function Update()
+    local GameManager = require("GameManager")
+    GameManager:Update()
+end

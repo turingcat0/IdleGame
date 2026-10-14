@@ -1,0 +1,18 @@
+local Skill = require("Gameplay.Skills.Skill")
+local EffectTypes = require("Config.Generated.EffectTypes")
+local EffectFactory = require("Gameplay.Effects.EffectFactory")
+
+---@class ShadowStrike : Skill
+---暗影箭：命中时降低目标速度（40%，4秒）
+local ShadowStrike = Skill:extend()
+
+function ShadowStrike:OnCast(source, target)
+end
+
+function ShadowStrike:OnHit(source, target, ctx)
+    if not target then return end
+    local instance = EffectFactory.CreateInstance(EffectTypes.speed_down, target, source, 4, { value = -0.4 })
+    target:AddEffect(instance)
+end
+
+return ShadowStrike

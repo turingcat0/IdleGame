@@ -1,0 +1,295 @@
+local GameManager = require("GameManager")
+local StageConfigs = require("Config.Generated.Stages")
+
+--- 副本选择窗口（新版地图式）
+--- 节点结构（当前场景）：
+--- DungeonWindow (Canvas + LuaBehaviour)
+--- └ Background
+---    ├ TopBar/{Title(TMP), CloseButton(Button)}
+---    └ WindowPanel (Image)
+---       ├ MapRoot
+---       │  └ DragMask (Mask + Image)
+---       │     └ ScrollView (ScrollRect)
+---       │        └ Content
+---       │           ├ Map (Image)
+---       │           └ Dungeon1~4 {Icon(Image+Button), Name(TMP), Locked(Image)}
+---       ├ DetailCard (Image)
+---       │  ├ Frame (Image)
+---       │  ├ Name (TMP)
+---       │  ├ RecommandLevel (RectTransform)
+---       │  │  ├ RecommandLevel (TMP)   -- 推荐等级数值
+---       │  │  ├ Label (TMP)            -- "推荐等级："
+---       │  │  └ Description (TMP)      -- 奖励/锁定说明
+---       │  └ LeftTimes (TMP)
+---       │     └ TimesText (TMP)        -- 剩余扫荡次数
+---       └ ActionBar
+---          ├ EnterButton (Button)
+---          └ SweepButton (Button)
+
+---@type CS.UnityEngine.MonoBehaviour
+local self = self
+
+local closeButton = nil
+local titleText = nil
+
+---@type table[] { root, iconButton, iconImage, nameText, lockedImage, onClickListener }
+local dungeonEntries = {}
+
+local detailName = nil
+local detailLevel = nil
+local detailDesc = nil
+local detailTimesText = nil
+local enterButton = nil
+local sweepButton = nil
+
+local selectedStageId = nil
+
+--- Dungeon1~4 与 stageId 的映射（按推荐等级由低到高，方便调整）
+local DungeonStageIds = {
+    "dungeon_exp_1",   -- Dungeon1
+    "dungeon_gold_1",  -- Dungeon2
+    "dungeon_exp_2",   -- Dungeon3
+    "dungeon_gold_2",  -- Dungeon4
+}
+
+local function SafeFind(path, expectedType)
+    local obj = self.transform:Find(path)
+    if not obj then
+        print("[DungeonWindow] 找不到节点: " .. path)
+        return nil
+    end
+    if expectedType then
+        local comp = obj:GetComponent(expectedType)
+        if not comp then
+            print("[DungeonWindow] 节点 " .. path .. " 缺少组件: " .. tostring(expectedType))
+            return nil
+        end
+        return comp
+    end
+    return obj
+end
+
+local function GetDungeonManager()
+    return GameManager.dungeonManager
+end
+
+local function SetText(tmp, text)
+    if tmp then
+        tmp.text = text or ""
+    end
+end
+
+--- 刷新单个地图节点
+local function RefreshEntry(index)
+    local entry = dungeonEntries[index]
+    local stageId = DungeonStageIds[index]
+    if not entry or not stageId then
+        return
+    end
+
+    local dm = GetDungeonManager()
+    local sc = StageConfigs[stageId]
+    local unlocked, required = false, 0
+    if dm then
+        unlocked, required = dm:IsUnlocked(stageId)
+    end
+
+    if entry.nameText and sc then
+        entry.nameText.text = sc.name
+    end
+
+    -- 未解锁时显示锁定图标，但不阻挡点击（仍可查看详情）
+    if entry.lockedImage then
+        entry.lockedImage.gameObject:SetActive(not unlocked)
+        entry.lockedImage.raycastTarget = false
+    end
+
+    -- 地图图标按钮始终可点，用来选中并查看详情
+    if entry.iconButton then
+        entry.iconButton.interactable = true
+    end
+end
+
+--- 刷新详情面板与操作按钮
+local function RefreshDetail()
+    local dm = GetDungeonManager()
+
+    if not selectedStageId then
+        SetText(detailName, "副本名称")
+        SetText(detailLevel, "--")
+        SetText(detailDesc, "选择一个副本")
+        SetText(detailTimesText, "--")
+        if enterButton then enterButton.interactable = false end
+        if sweepButton then sweepButton.interactable = false end
+        return
+    end
+
+    local sc = StageConfigs[selectedStageId]
+    local unlocked, required = false, 0
+    if dm then
+        unlocked, required = dm:IsUnlocked(selectedStageId)
+    end
+
+    if sc then
+        SetText(detailName, sc.name)
+        SetText(detailLevel, tostring(sc.recommendedLevel))
+        if unlocked then
+            SetText(detailDesc, string.format("通关奖励：%d 经验 / %d 金币", sc.expReward or 0, sc.coinReward or 0))
+        else
+            SetText(detailDesc, string.format("需要 %d 级解锁", required))
+        end
+    end
+
+    if unlocked then
+        local remaining = dm and dm:GetRemainingSweeps() or 0
+        local maxSweep = dm and dm:GetMaxDailySweep() or 0
+        SetText(detailTimesText, string.format("%d/%d", remaining, maxSweep))
+    else
+        SetText(detailTimesText, "未解锁")
+    end
+
+    if enterButton then
+        enterButton.interactable = unlocked
+    end
+    if sweepButton then
+        sweepButton.interactable = dm and dm:CanSweep(selectedStageId) or false
+    end
+end
+
+function Refresh()
+    for i = 1, #dungeonEntries do
+        RefreshEntry(i)
+    end
+    RefreshDetail()
+end
+
+local function OnDungeonIconClicked(index)
+    selectedStageId = DungeonStageIds[index]
+    Refresh()
+end
+
+function Awake()
+    closeButton = SafeFind("Background/TopBar/CloseButton", typeof(CS.UnityEngine.UI.Button))
+    titleText = SafeFind("Background/TopBar/Title", typeof(CS.TMPro.TextMeshProUGUI))
+
+    local mapContent = SafeFind("Background/WindowPanel/MapRoot/DragMask/ScrollView/Content")
+    if mapContent then
+        for i = 1, 4 do
+            local root = mapContent:Find("Dungeon" .. i)
+            if root then
+                local entry = {
+                    root = root
+                }
+                local iconTf = root:Find("Icon")
+                if iconTf then
+                    entry.iconButton = iconTf:GetComponent(typeof(CS.UnityEngine.UI.Button))
+                    entry.iconImage = iconTf:GetComponent(typeof(CS.UnityEngine.UI.Image))
+                end
+                local nameTf = root:Find("Name")
+                if nameTf then
+                    entry.nameText = nameTf:GetComponent(typeof(CS.TMPro.TextMeshProUGUI))
+                end
+                local lockedTf = root:Find("Locked")
+                if lockedTf then
+                    entry.lockedImage = lockedTf:GetComponent(typeof(CS.UnityEngine.UI.Image))
+                end
+
+                if entry.iconButton then
+                    local idx = i
+                    entry.onClickListener = function()
+                        OnDungeonIconClicked(idx)
+                    end
+                    entry.iconButton.onClick:AddListener(entry.onClickListener)
+                end
+
+                dungeonEntries[i] = entry
+            else
+                print("[DungeonWindow] 找不到 Dungeon" .. i)
+            end
+        end
+    end
+
+    detailName = SafeFind("Background/WindowPanel/DetailCard/Name", typeof(CS.TMPro.TextMeshProUGUI))
+    detailLevel = SafeFind("Background/WindowPanel/DetailCard/RecommandLevel/RecommandLevel", typeof(CS.TMPro.TextMeshProUGUI))
+    detailDesc = SafeFind("Background/WindowPanel/DetailCard/RecommandLevel/Description", typeof(CS.TMPro.TextMeshProUGUI))
+    detailTimesText = SafeFind("Background/WindowPanel/DetailCard/LeftTimes/TimesText", typeof(CS.TMPro.TextMeshProUGUI))
+
+    enterButton = SafeFind("Background/WindowPanel/ActionBar/EnterButton", typeof(CS.UnityEngine.UI.Button))
+    sweepButton = SafeFind("Background/WindowPanel/ActionBar/SweepButton", typeof(CS.UnityEngine.UI.Button))
+
+    if closeButton then
+        closeButton.onClick:AddListener(Hide)
+    end
+    if enterButton then
+        enterButton.onClick:AddListener(OnEnterClicked)
+    end
+    if sweepButton then
+        sweepButton.onClick:AddListener(OnSweepClicked)
+    end
+end
+
+function Start()
+    local canvas = self:GetComponent(typeof(CS.UnityEngine.Canvas))
+    if canvas then
+        canvas.enabled = false
+    end
+end
+
+function Show()
+    local canvas = self:GetComponent(typeof(CS.UnityEngine.Canvas))
+    if canvas then
+        canvas.enabled = true
+    end
+
+    -- 默认选中第一个副本（未解锁也能查看详情）
+    if not selectedStageId then
+        selectedStageId = DungeonStageIds[1]
+    end
+    Refresh()
+end
+
+function Hide()
+    local canvas = self:GetComponent(typeof(CS.UnityEngine.Canvas))
+    if canvas then
+        canvas.enabled = false
+    end
+end
+
+function OnEnterClicked()
+    if not selectedStageId then
+        return
+    end
+    local dm = GetDungeonManager()
+    if dm then
+        dm:EnterDungeon(selectedStageId)
+    end
+    Hide()
+end
+
+function OnSweepClicked()
+    if not selectedStageId then
+        return
+    end
+    local dm = GetDungeonManager()
+    if dm then
+        dm:Sweep(selectedStageId)
+    end
+    Refresh()
+end
+
+function OnDestroy()
+    if closeButton then
+        closeButton.onClick:RemoveListener(Hide)
+    end
+    if enterButton then
+        enterButton.onClick:RemoveListener(OnEnterClicked)
+    end
+    if sweepButton then
+        sweepButton.onClick:RemoveListener(OnSweepClicked)
+    end
+    for _, entry in ipairs(dungeonEntries) do
+        if entry.iconButton and entry.onClickListener then
+            entry.iconButton.onClick:RemoveListener(entry.onClickListener)
+        end
+    end
+end

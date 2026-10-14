@@ -1,0 +1,173 @@
+local Object = require("Utils.classic")
+local Enemies = require("Gameplay.Entities.Enemies")
+local EnemyInstance = require("Gameplay.Entities.EnemyInstance")
+local EventSystem = require("Event.EventSystem")
+local EventType   = require("Event.EventType")
+local hasVisualBounds, EnemyVisualBounds = pcall(require, "Config.Generated.EnemyVisualBounds")
+if not hasVisualBounds then EnemyVisualBounds = {} end
+
+---@class EnemySpawner 波次驱动的敌人生成器，随机性保留在 spawner 内部
+---@field enemyManager EnemyManager
+---@field enemySpawnPoint CS.UnityEngine.Transform
+---@field enemyRoot CS.UnityEngine.Transform
+---@field loadedControllers table<string, CS.UnityEngine.RuntimeAnimatorController>
+---@field enemyPrefab CS.UnityEngine.GameObject
+---@field waveConfig table 当前波次配置
+---@field enemyPool string[] 解析后的可选敌人 ID 列表
+---@field totalSpawned integer 当前波次已生成总数
+---@field spawnTimer number 批次间隔计时器
+---@field waveComplete boolean 当前波次是否已全部生成
+local EnemySpawner = Object:extend()
+
+---@param enemyManager EnemyManager
+---@param spawnPoint CS.UnityEngine.GameObject
+---@param enemyRoot CS.UnityEngine.GameObject
+function EnemySpawner:New(enemyManager, spawnPoint, enemyRoot)
+    self.enemyManager = enemyManager
+    self.enemySpawnPoint = spawnPoint.transform
+    self.enemyRoot = enemyRoot.transform
+
+    self.enemyPrefab = CS.UnityEngine.Resources.Load("Prefabs/EnemyBase", typeof(CS.UnityEngine.GameObject))
+    self.loadedControllers = {}
+
+    self.waveConfig = nil
+    self.enemyPool = {}
+    self.totalSpawned = 0
+    self.spawnTimer = 0
+    self.waveComplete = true
+end
+
+---开始一个波次，由 LevelManager 调用
+---@param waveConfig table {enemyPool, count, difficulty, maxCluster, spawnInterval}
+function EnemySpawner:StartWave(waveConfig)
+    self.waveConfig = waveConfig
+    self.enemyPool = {}
+    for id in string.gmatch(waveConfig.enemyPool, "[^;]+") do
+        table.insert(self.enemyPool, id)
+    end
+    self.totalSpawned = 0
+    self.spawnTimer = 0
+    self.waveComplete = false
+end
+
+function EnemySpawner:OnUpdate()
+    if self.waveComplete then return end
+
+    self.spawnTimer = self.spawnTimer + CS.UnityEngine.Time.deltaTime
+    if self.spawnTimer >= self.waveConfig.spawnInterval then
+        self.spawnTimer = 0
+        self:SpawnCluster()
+        if self.totalSpawned >= self.waveConfig.count then
+            self.waveComplete = true
+        end
+    end
+end
+
+---一次批次：随机选敌人类型、随机数量、随机等级
+function EnemySpawner:SpawnCluster()
+    local enemyId = self.enemyPool[math.random(1, #self.enemyPool)]
+    local enemy = Enemies[enemyId]
+
+    local remaining = self.waveConfig.count - self.totalSpawned
+    local number = math.min(math.random(1, self.waveConfig.maxCluster), remaining)
+
+    for _ = 1, number do
+        local level = math.max(self.waveConfig.difficulty + math.random(-3, 3), 1)
+        self:SpawnOne(enemy, level)
+        self.totalSpawned = self.totalSpawned + 1
+    end
+end
+
+---@return boolean 当前波次是否已全部生成完毕
+function EnemySpawner:IsWaveSpawnComplete()
+    return self.waveComplete
+end
+
+---停止当前波次生成（用于进 boss 战等场景）
+function EnemySpawner:StopWave()
+    self.waveComplete = true
+end
+
+---@param enemy Enemy
+function EnemySpawner:GetAnimatorController(enemy)
+    if not self.loadedControllers[enemy.id] then
+        local controller = CS.UnityEngine.Resources.Load("AnimatorControllers/"..enemy.id, typeof(CS.UnityEngine.RuntimeAnimatorController))
+        self.loadedControllers[enemy.id] = controller
+    end
+    return self.loadedControllers[enemy.id]
+end
+
+---@param enemy Enemy
+---@param level integer
+---@param positionX number? 可选，指定生成位置 x；不填则用 spawnPoint + 随机偏移
+---@return EnemyInstance
+function EnemySpawner:SpawnOne(enemy, level, positionX)
+    ---@type CS.UnityEngine.GameObject
+    local enemyGo = CS.UnityEngine.Object.Instantiate(self.enemyPrefab, self.enemyRoot)
+    local spawnPos = self.enemySpawnPoint.transform.position
+    local x = positionX or (spawnPos.x + (math.random() * 4 - 2))
+    enemyGo.transform.position = CS.UnityEngine.Vector3(x, spawnPos.y, spawnPos.z)
+
+    -- 按 Enemy 配置的 size 在 prefab 基础缩放上叠加倍率（boss 更大、小怪保持原样）
+    local size = enemy.size or 1
+    local base = enemyGo.transform.localScale
+    enemyGo.transform.localScale = CS.UnityEngine.Vector3(base.x * size, base.y * size, base.z * size)
+
+    -- 用离线生成的视觉底边偏移把脚底对齐到 spawnPoint.y
+    -- 取所有动画帧中的最小 bottomY（最靠下的帧），保证任意帧都不会陷进地面
+    local vb = EnemyVisualBounds[enemy.id]
+    if vb then
+        local pos = enemyGo.transform.position
+        enemyGo.transform.position = CS.UnityEngine.Vector3(
+            pos.x,
+            spawnPos.y - vb.bottomY * enemyGo.transform.lossyScale.y,
+            pos.z)
+    end
+
+    ---@type CS.UnityEngine.Animator
+    local animator = enemyGo:GetComponent(typeof(CS.UnityEngine.Animator))
+    animator.runtimeAnimatorController = self:GetAnimatorController(enemy)
+
+    local enemyInstance = EnemyInstance(enemy, level, enemyGo.transform.position.x)
+    self.enemyManager:Add(enemyInstance)
+
+    ---@type CS.LuaBehaviour
+    local luaBehaviur = enemyGo:GetComponent(typeof(CS.LuaBehaviour))
+    luaBehaviur.scriptEnv.Init(enemyGo, enemyInstance)
+
+    return enemyInstance
+end
+
+---生成 boss，由 LevelManager:EnterBoss 调用
+---@param bossId string
+---@param level integer
+---@return EnemyInstance?
+function EnemySpawner:SpawnBoss(bossId, level)
+    local boss = Enemies[bossId]
+    if not boss then
+        print(string.format("[EnemySpawner] boss id '%s' not found", bossId))
+        return nil
+    end
+    local instance = self:SpawnOne(boss, level)
+    EventSystem:FireEvent(EventType.BossSpawned, instance, instance)
+    return instance
+end
+
+---在指定位置生成小怪（boss 召唤用），不走波次配置
+---@param enemyId string
+---@param count integer
+---@param positionX number
+---@param level integer
+function EnemySpawner:SpawnMinion(enemyId, count, positionX, level)
+    local enemy = Enemies[enemyId]
+    if not enemy then
+        print(string.format("[EnemySpawner] enemy id '%s' not found", enemyId))
+        return
+    end
+    for _ = 1, count do
+        local offset = math.random() * 2 - 1
+        self:SpawnOne(enemy, level, positionX + offset)
+    end
+end
+
+return EnemySpawner

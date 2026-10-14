@@ -1,0 +1,97 @@
+local GameManager = require("GameManager")
+local SkillType = require("Gameplay.Skills.SkillType")
+---@type CS.UnityEngine.MonoBehaviour
+local self = self
+
+---@type CS.UnityEngine.UI.Button
+local button = nil
+
+---@type CS.UnityEngine.UI.Image
+local iconImage = nil
+
+---@type CS.UnityEngine.UI.Image
+local cooldownImage = nil
+
+local originColor
+
+local targetColor = CS.UnityEngine.Color(1, 0.9316086, 0.7421383)
+
+---@type table<SkillType, CS.UnityEngine.Sprite>
+local skillIcons = {}
+
+---@type CS.UnityEngine.Sprite
+local startBattleIcon = nil
+
+function Start()
+    button = self:GetComponent(typeof(CS.UnityEngine.UI.Button))
+    button.onClick:AddListener(OnButtonClicked)
+
+    local panel = self.transform:Find("Panel")
+    if panel then
+        iconImage = panel:GetComponent(typeof(CS.UnityEngine.UI.Image))
+    end
+    if iconImage then
+        originColor = iconImage.color
+    end
+
+    local cooldownTransform = self.transform:Find("Cooldown")
+    if cooldownTransform then
+        cooldownImage = cooldownTransform:GetComponent(typeof(CS.UnityEngine.UI.Image))
+        if cooldownImage then
+            cooldownImage.type = CS.UnityEngine.UI.Image.Type.Filled
+            cooldownImage.fillMethod = CS.UnityEngine.UI.Image.FillMethod.Radial360
+            cooldownImage.fillAmount = 0
+        end
+    end
+
+    skillIcons[SkillType.Normal] = CS.UnityEngine.Resources.Load("Textures/UI/SkillType_Normal", typeof(CS.UnityEngine.Sprite))
+    skillIcons[SkillType.Combat] = CS.UnityEngine.Resources.Load("Textures/UI/SkillType_Combat", typeof(CS.UnityEngine.Sprite))
+    skillIcons[SkillType.Signature] = CS.UnityEngine.Resources.Load("Textures/UI/SkillType_Signature", typeof(CS.UnityEngine.Sprite))
+    startBattleIcon = CS.UnityEngine.Resources.Load("Textures/UI/AttackStart", typeof(CS.UnityEngine.Sprite))
+end
+
+function OnDestroy()
+    button.onClick:RemoveListener(OnButtonClicked)
+end
+
+function Update()
+    local player = GameManager.player
+    button.interactable = player.idle or player:CanAttack()
+
+    ---图标：idle 显示开始战斗；释放中显示当前技能；等待中显示锁定的下一个技能
+    local icon = nil
+    if player.idle and startBattleIcon then
+        icon = startBattleIcon
+    elseif player.activeSkill then
+        icon = skillIcons[player.activeSkill.skillType]
+    else
+        local nextSkill = player:GetNextSkillToCast()
+        icon = nextSkill and skillIcons[nextSkill.skillType] or nil
+    end
+    if icon and iconImage then
+        iconImage.sprite = icon
+    end
+
+    ---颜色：idle 时呼吸发光，其余状态保持原色
+    if iconImage then
+        if player.idle then
+            local t = math.sin(CS.UnityEngine.Time.time * 3)
+            iconImage.color = CS.UnityEngine.Color.Lerp(originColor, targetColor, t)
+        else
+            iconImage.color = originColor
+        end
+    end
+
+    ---圆盘：释放中按持续时间倒计时（full → empty），其余状态隐藏
+    if cooldownImage then
+        if player.activeSkill and player.activeSkill.duration > 0 then
+            cooldownImage.fillAmount = math.max(0, player.skillDurationLeft / player.activeSkill.duration)
+        else
+            cooldownImage.fillAmount = 0
+        end
+    end
+end
+
+function OnButtonClicked()
+    GameManager.playerController:TryAttack()
+end

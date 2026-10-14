@@ -1,0 +1,59 @@
+local Object = require("Utils.classic")
+
+---@class Skill
+---@field id string
+---@field name string
+---@field skillType SkillType
+---@field attributes table<AttributeType, Attribute>
+---@field duration number  技能演出/硬直时间
+---@field cooldown number  技能冷却时间
+---@field delay number
+---@field projectile Projectile? 非 nil 表示远程技能，指向 Projectiles 注册项；nil 为近战，走 delay 定时结算
+---@field substate integer 驱动 Animator 子状态参数，用于区分同 skillType 的不同技能动画
+---@field unlockLevel integer 玩家解锁该技能所需等级（仅玩家技能有意义）
+local Skill = Object:extend()
+
+---
+---@param id string
+---@param name string
+---@param skillType SkillType
+---@param attributes Attribute[]
+---@param duration number
+---@param cooldown number
+---@param delay number
+---@param projectile Projectile?
+---@param substate integer? 省略时回落到 skillType
+---@param unlockLevel integer? 省略时默认为 1
+function Skill:New(id, name, skillType, attributes, duration, cooldown, delay, projectile, substate, unlockLevel)
+    self.id = id
+    self.name = name
+    self.skillType = skillType
+    self.attributes = attributes
+    self.duration = duration
+    self.cooldown = cooldown
+    self.delay = delay
+    self.projectile = projectile
+    self.substate = substate or skillType
+    self.unlockLevel = unlockLevel or 1
+end
+
+---@param type AttributeType
+---@return number
+function Skill:Get(type)
+    return self.attributes[type]:GetFinalValue()
+end
+
+---技能释放时调用（扣费/动画开始后）
+---@param source Entity
+---@param target Entity?
+function Skill:OnCast(source, target)
+end
+
+---技能命中目标时调用（伤害结算后）
+---@param source Entity
+---@param target Entity
+---@param ctx DamageContext
+function Skill:OnHit(source, target, ctx)
+end
+
+return Skill

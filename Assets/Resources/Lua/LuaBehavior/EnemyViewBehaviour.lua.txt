@@ -1,0 +1,28 @@
+local EnemyView = require "Gameplay.Entities.EnemyView"
+---@type EnemyView
+local enemyView = nil
+---@type EnemyInstance
+local enemyInst = nil
+
+function Start()
+    
+end
+
+function Init(go, enemyInstance)
+    enemyInst  = enemyInstance
+    enemyView = EnemyView(go, enemyInstance)
+end
+
+---供抛射物命中时反查所属实体
+---@return EnemyInstance
+function GetEntity()
+    return enemyInst
+end
+
+function Update()
+    enemyView:OnUpdate()
+end
+
+function OnDestroy()
+    enemyView:Dispose()
+end

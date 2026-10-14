@@ -1,0 +1,186 @@
+local Object = require("Utils.classic")
+local EventSystem = require("Event.EventSystem")
+local EventType = require("Event.EventType")
+local UIManager = Object:extend()
+
+function UIManager:New()
+    self.damageHudPrefab = CS.UnityEngine.Resources.Load("Prefabs/DamageHUD")
+    self.damageHudParent = CS.UnityEngine.GameObject.Find("DamageHuds")
+    self.damageHudY = -20.5
+
+    self.dropPrefab = CS.UnityEngine.Resources.Load("Prefabs/Loot")
+    self.dropParent = CS.UnityEngine.GameObject.Find("Loots")
+    self.dropY =  -22.3
+
+    -- === 弹窗队列系统 ===
+    self.comparePanel = nil        -- EquipmentComparePanel GameObject（延迟初始化）
+    self.compareQueue = {}         -- 等待显示的对比弹窗队列
+    self.currentCompare = nil      -- 当前正在显示的对比
+
+    -- === 水晶粒子特效 ===
+    self.crystalParticle = nil     -- CrystalParticle GameObject（延迟初始化）
+
+    EventSystem:RegisterListener(EventType.PlayerReachedBorder, nil, self, UIManager.OnWorldWrap)
+end
+
+---世界 wrap 事件：平移掉落物 Transform
+function UIManager:OnWorldWrap(delta)
+    if not self.dropParent then return end
+    for i = 0, self.dropParent.transform.childCount - 1 do
+        local child = self.dropParent.transform:GetChild(i)
+        local p = child.position
+        child.position = CS.UnityEngine.Vector3(p.x + delta, p.y, p.z)
+    end
+end
+
+
+---@param entity Entity
+---@param damage number
+---@param crit number
+function UIManager:PopDamageHUD(entity, damage, crit)
+    local hudY = self.damageHudY
+    local lm = require("GameManager").levelManager
+    if lm and lm.logicScene and lm.logicScene.spawnY then
+        hudY = lm.logicScene.spawnY + 0.5
+    end
+    local position = CS.UnityEngine.Vector3(entity.position, hudY, 0)
+
+    ---@type CS.UnityEngine.GameObject
+    local go = CS.UnityEngine.GameObject.Instantiate(self.damageHudPrefab, self.damageHudParent.transform)
+    go.transform.position = position
+    ---@type CS.TMPro.TMP_Text
+    local tmpText = go:GetComponent(typeof(CS.TMPro.TMP_Text))
+    if crit then
+        tmpText.color = CS.UnityEngine.Color(1, 0, 0, 1)
+    else
+        tmpText.color = CS.UnityEngine.Color(1, 1, 1, 1)
+    end
+    tmpText.text = tostring(math.ceil(damage))
+end
+
+---
+---@param itemInstance ItemInstance
+---@param entity Entity
+function UIManager:DropItem(itemInstance, entity)
+    ---@type CS.UnityEngine.GameObject
+    local go = CS.UnityEngine.GameObject.Instantiate(self.dropPrefab, self.dropParent.transform)
+    local dropY = self.dropY
+    local lm = require("GameManager").levelManager
+    if lm and lm.logicScene and lm.logicScene.spawnY then
+        dropY = lm.logicScene.spawnY - 1.3
+    end
+    local newPos = CS.UnityEngine.Vector3(entity.position, dropY, 0)
+    go.transform.position = newPos
+
+    ---@type LuaBehaviour
+    local lb = go:GetComponent(typeof(CS.LuaBehaviour))
+    lb.scriptEnv.SetItemInstance(itemInstance)
+
+    local texture = CS.UnityEngine.Resources.Load("Textures/"..itemInstance.item.id, typeof(CS.UnityEngine.Sprite))
+    ---@type CS.UnityEngine.SpriteRenderer
+    local component = go:GetComponent(typeof(CS.UnityEngine.SpriteRenderer))
+    component.sprite = texture
+
+end
+
+---@return number? 场景中最右侧掉落物的 x 坐标，没有则返回 nil
+function UIManager:GetRightmostLootX()
+    if not self.dropParent or self.dropParent.transform.childCount == 0 then
+        return nil
+    end
+    local maxX = -math.huge
+    for i = 0, self.dropParent.transform.childCount - 1 do
+        local x = self.dropParent.transform:GetChild(i).position.x
+        if x > maxX then maxX = x end
+    end
+    return maxX
+end
+
+---清掉所有掉落物（清场时调用）
+function UIManager:ClearLoots()
+    if not self.dropParent then return end
+    local toDestroy = {}
+    for i = 0, self.dropParent.transform.childCount - 1 do
+        toDestroy[#toDestroy + 1] = self.dropParent.transform:GetChild(i).gameObject
+    end
+    for _, go in ipairs(toDestroy) do
+        CS.UnityEngine.Object.Destroy(go)
+    end
+end
+
+---播放水晶粒子特效（分解装备时调用）
+function UIManager:PopCrystal()
+    --延迟查找 CrystalParticle 引用
+    if self.crystalParticle == nil then
+        self.crystalParticle = CS.UnityEngine.GameObject.Find("CrystalParticle")
+    end
+    if self.crystalParticle then
+        ---@type CS.UnityEngine.ParticleSystem
+        local ps = self.crystalParticle:GetComponent(typeof(CS.UnityEngine.ParticleSystem))
+        if ps then
+            ps:Emit(10)
+        end
+    end
+end
+
+-- === 弹窗队列系统 ===
+
+---请求显示装备对比弹窗（如果已有弹窗在显示，则加入队列）
+---@param oldItem ItemInstance
+---@param newItem ItemInstance
+---@param onEquip function 玩家选择装备时的回调
+---@param onDecompose function 玩家选择分解时的回调
+function UIManager:ShowEquipmentCompare(oldItem, newItem, onEquip, onDecompose)
+    table.insert(self.compareQueue, {
+        oldItem = oldItem,
+        newItem = newItem,
+        onEquip = onEquip,
+        onDecompose = onDecompose,
+    })
+    self:ProcessCompareQueue()
+end
+
+---处理弹窗队列：同一时间只显示一个弹窗，其余排队等待
+function UIManager:ProcessCompareQueue()
+    if self.currentCompare ~= nil then
+        return
+    end
+    if #self.compareQueue == 0 then
+        return
+    end
+
+    --延迟查找面板引用
+    if self.comparePanel == nil then
+        self.comparePanel = CS.UnityEngine.GameObject.Find("EquipmentComparePanel")
+    end
+
+    self.currentCompare = table.remove(self.compareQueue, 1)
+
+    ---@type LuaBehaviour
+    local lb = self.comparePanel:GetComponent(typeof(CS.LuaBehaviour))
+    lb.scriptEnv.Init(
+        self.currentCompare.oldItem,
+        self.currentCompare.newItem,
+        function() self:OnCompareResolved(true) end,
+        function() self:OnCompareResolved(false) end
+    )
+end
+
+---弹窗已解决（玩家做出选择后调用）
+---@param equipped boolean 玩家是否选择装备
+function UIManager:OnCompareResolved(equipped)
+    local compare = self.currentCompare
+    self.currentCompare = nil
+
+    if equipped then
+        compare.onEquip()
+    else
+        compare.onDecompose()
+    end
+
+    --处理队列中的下一个
+    self:ProcessCompareQueue()
+end
+
+return UIManager
+

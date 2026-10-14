@@ -1,0 +1,53 @@
+
+local Utils = {}
+
+function Utils.PrintArray(t, func)
+    local output = {}
+    for i, v in ipairs(t) do
+        local info = v
+        if func then
+            info = func(v)
+        end
+        local str = string.format("%d-%s", i, info)
+        table.insert(output, str)
+    end
+    print(table.concat(output, "|"))
+end
+
+function Utils.PrintHash(t, func)
+    local output = {}
+    for k, v in pairs(t) do
+        local info = v
+        if func then
+            info = func(v)
+        end
+        local str = string.format("%s:%s", k, info)
+        table.insert(output, str)
+    end
+    print("{"..table.concat(output, "|").."}")
+end
+
+function Utils.Contains(array, target)
+    for _, value in ipairs(array) do
+        if value == target then
+            return true
+        end
+    end
+    return false
+end
+
+function Utils.DeepCopy(obj)
+    if type(obj) ~= "table" then
+        return obj
+    end
+
+    local copy = {}
+
+    for key, value in pairs(obj) do
+        copy[Utils.DeepCopy(key)] = Utils.DeepCopy(value)
+    end
+
+    return setmetatable(copy, getmetatable(obj))
+end
+
+return Utils

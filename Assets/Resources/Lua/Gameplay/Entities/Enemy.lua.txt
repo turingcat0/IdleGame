@@ -1,0 +1,39 @@
+local Object = require("Utils.classic")
+
+---@class Enemy : Entity 敌人原型类 类似物品的原型类
+---@field id string
+---@field name string
+---@field attributes table<AttributeType, Attribute>
+---@field skill Skill
+---@field isBoss boolean
+---@field size number 运行时缩放倍率，默认 1
+---@field dropRate number 装备掉落概率 0~1
+---@field dropRarityBonus integer 掉落品质等级加成
+---@field enemyType string? normal / elite / boss
+---@field dead boolean
+local Enemy = Object:extend()
+
+---
+---@param id string
+---@param name string
+---@param atrributes table<AttributeType, Attribute>
+---@param skill Skill 怪物攻击时释放的技能 包括普通攻击
+---@param isBoss boolean
+---@param size number? 运行时缩放倍率，默认 1
+---@param dropRate number? 装备掉落概率，默认 0
+---@param dropRarityBonus integer? 掉落品质等级加成，默认 0
+---@param enemyType string? 怪物类型 normal / elite / boss
+function Enemy:New(id, name, atrributes, skill, isBoss, size, dropRate, dropRarityBonus, enemyType)
+    Enemy.super.New(self)
+    self.id = id
+    self.name = name
+    self.attributes = atrributes
+    self.skill = skill
+    self.isBoss = isBoss or false
+    self.size = size or 1
+    self.dropRate = dropRate or 0
+    self.dropRarityBonus = dropRarityBonus or 0
+    self.enemyType = enemyType or nil
+end
+
+return Enemy

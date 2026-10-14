@@ -1,0 +1,8 @@
+---@enum SkillType
+local SkillType = {
+    Normal    = 1, -- 释放后回复 mana
+    Combat    = 2, -- 释放后消耗 mana
+    Signature = 3, -- 掌控技：不消耗 mana，冷却好了由 SkillSelector 选中释放
+}
+
+return SkillType

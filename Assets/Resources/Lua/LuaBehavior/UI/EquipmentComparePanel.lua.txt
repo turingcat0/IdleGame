@@ -1,0 +1,205 @@
+local Rarity        = require "Gameplay.Items.Rarity"
+local AttributeType = require "Gameplay.Stats.AttributeType"
+
+---@type CS.UnityEngine.Canvas
+local canvas
+
+-- === 旧装备栏 UI 引用 ===
+---@type CS.TMPro.TMP_Text
+local oldName
+---@type CS.UnityEngine.UI.Image
+local oldIcon
+---@type CS.TMPro.TMP_Text
+local oldRarity
+---@type CS.TMPro.TMP_Text
+local oldLevel
+---@type CS.TMPro.TMP_Text
+local oldPower
+---@type table<int, {text:CS.TMPro.TMP_Text, row:CS.UnityEngine.Transform}>
+local oldAttrs = {}
+
+-- === 新装备栏 UI 引用 ===
+---@type CS.TMPro.TMP_Text
+local newName
+---@type CS.UnityEngine.UI.Image
+local newIcon
+---@type CS.TMPro.TMP_Text
+local newRarity
+---@type CS.TMPro.TMP_Text
+local newLevel
+---@type CS.TMPro.TMP_Text
+local newPower
+---@type table<int, {text:CS.TMPro.TMP_Text, add:CS.TMPro.TMP_Text, sub:CS.TMPro.TMP_Text, row:CS.UnityEngine.Transform}>
+local newAttrs = {}
+
+-- === 战力差值 ===
+---@type CS.TMPro.TMP_Text
+local powerDelta
+
+-- === 按钮 ===
+---@type CS.UnityEngine.UI.Button
+local equipButton
+---@type CS.UnityEngine.UI.Button
+local decomposeButton
+
+-- === 回调（由 UIManager 通过 Init 传入）===
+local onEquipCallback
+local onDecomposeCallback
+
+local rarityTranslations = {
+    [Rarity.Common] = "普通",
+    [Rarity.Uncommon] = "优秀",
+    [Rarity.Rare] = "稀有",
+    [Rarity.Epic] = "史诗",
+    [Rarity.Legendary] = "传说",
+    [Rarity.Mythic] = "神话",
+}
+
+---安全获取属性最终值
+---@param itemInstance ItemInstance
+---@param attrType AttributeType
+---@return number
+local function GetAttrValue(itemInstance, attrType)
+    local attr = itemInstance.equipmentEffect.attributes[attrType]
+    return attr and attr:GetFinalValue() or 0
+end
+
+---格式化属性值（暴击率/暴击伤害显示为百分比）
+---@param attrType AttributeType
+---@param value number
+---@return string
+local function FormatAttr(attrType, value)
+    if attrType == AttributeType.CritChance or attrType == AttributeType.CritDamage then
+        return tostring(value * 100) .. "%"
+    end
+    return tostring(value)
+end
+
+---填充某一栏的头部信息（名称/图标/稀有度/等级/战力）
+---@param itemInstance ItemInstance
+---@param nameText CS.TMPro.TMP_Text
+---@param iconImage CS.UnityEngine.UI.Image
+---@param rarityText CS.TMPro.TMP_Text
+---@param levelText CS.TMPro.TMP_Text
+---@param powerText CS.TMPro.TMP_Text
+local function PopulateHeader(itemInstance, nameText, iconImage, rarityText, levelText, powerText)
+    nameText:SetText(itemInstance.item.name)
+    local texture = CS.UnityEngine.Resources.Load("Textures/"..itemInstance.item.id, typeof(CS.UnityEngine.Sprite))
+    iconImage.sprite = texture
+    rarityText:SetText(rarityTranslations[itemInstance.item.rarity])
+    levelText:SetText("Lv"..itemInstance.level)
+    powerText:SetText(tostring(math.ceil(itemInstance:GetPower())))
+end
+
+function Start()
+    canvas = self.gameObject:GetComponent(typeof(CS.UnityEngine.Canvas))
+
+    --旧装备栏
+    oldName   = self.transform:Find("Background/OldEquipment/Name"):GetComponent(typeof(CS.TMPro.TMP_Text))
+    oldIcon   = self.transform:Find("Background/OldEquipment/Icon"):GetComponent(typeof(CS.UnityEngine.UI.Image))
+    oldRarity = self.transform:Find("Background/OldEquipment/Rarity"):GetComponent(typeof(CS.TMPro.TMP_Text))
+    oldLevel  = self.transform:Find("Background/OldEquipment/Level"):GetComponent(typeof(CS.TMPro.TMP_Text))
+    oldPower  = self.transform:Find("Background/OldEquipment/PowerParent/Power"):GetComponent(typeof(CS.TMPro.TMP_Text))
+    for i = 1, 7 do
+        local row = self.transform:Find("Background/OldEquipment/Attributes/Attribute"..i)
+        oldAttrs[i] = {
+            text = row:Find("Value"):GetComponent(typeof(CS.TMPro.TMP_Text)),
+            row  = row,
+        }
+    end
+
+    --新装备栏
+    newName   = self.transform:Find("Background/NewEquipment/Name"):GetComponent(typeof(CS.TMPro.TMP_Text))
+    newIcon   = self.transform:Find("Background/NewEquipment/Icon"):GetComponent(typeof(CS.UnityEngine.UI.Image))
+    newRarity = self.transform:Find("Background/NewEquipment/Rarity"):GetComponent(typeof(CS.TMPro.TMP_Text))
+    newLevel  = self.transform:Find("Background/NewEquipment/Level"):GetComponent(typeof(CS.TMPro.TMP_Text))
+    newPower  = self.transform:Find("Background/NewEquipment/PowerParent/Power"):GetComponent(typeof(CS.TMPro.TMP_Text))
+    for i = 1, 7 do
+        local row = self.transform:Find("Background/NewEquipment/Attributes/Attribute"..i)
+        local values = row:Find("Values")
+        newAttrs[i] = {
+            text = values:Find("Value"):GetComponent(typeof(CS.TMPro.TMP_Text)),
+            add  = values:Find("Add"):GetComponent(typeof(CS.TMPro.TMP_Text)),
+            sub  = values:Find("Sub"):GetComponent(typeof(CS.TMPro.TMP_Text)),
+            row  = row,
+        }
+    end
+
+    --战力差值（挂在新装备栏的 PowerParent 下）
+    powerDelta = self.transform:Find("Background/NewEquipment/PowerParent/PowerDelta"):GetComponent(typeof(CS.TMPro.TMP_Text))
+
+    --按钮
+    equipButton     = self.transform:Find("Background/EquipButton"):GetComponent(typeof(CS.UnityEngine.UI.Button))
+    decomposeButton = self.transform:Find("Background/DecomposeButton"):GetComponent(typeof(CS.UnityEngine.UI.Button))
+
+    equipButton.onClick:AddListener(function()
+        canvas.enabled = false
+        if onEquipCallback then onEquipCallback() end
+    end)
+
+    decomposeButton.onClick:AddListener(function()
+        canvas.enabled = false
+        if onDecomposeCallback then onDecomposeCallback() end
+    end)
+
+    canvas.enabled = false
+end
+
+function OnDestroy()
+    equipButton.onClick:RemoveAllListeners()
+    decomposeButton.onClick:RemoveAllListeners()
+end
+
+---初始化对比面板（由 UIManager 调用）
+---@param oldItem ItemInstance
+---@param newItem ItemInstance
+---@param onEquip function
+---@param onDecompose function
+function Init(oldItem, newItem, onEquip, onDecompose)
+    onEquipCallback = onEquip
+    onDecomposeCallback = onDecompose
+
+    PopulateHeader(oldItem, oldName, oldIcon, oldRarity, oldLevel, oldPower)
+    PopulateHeader(newItem, newName, newIcon, newRarity, newLevel, newPower)
+
+    --每个属性的绝对值与增减值；整行显隐按「任一栏有值」统一，保证两列对齐
+    for i = 1, 7 do
+        local oldVal = GetAttrValue(oldItem, i)
+        local newVal = GetAttrValue(newItem, i)
+        local delta = newVal - oldVal
+
+        oldAttrs[i].text:SetText(FormatAttr(i, oldVal))
+        newAttrs[i].text:SetText(FormatAttr(i, newVal))
+
+        if delta > 0 then
+            newAttrs[i].add:SetText("+" .. FormatAttr(i, delta))
+            newAttrs[i].add.color = CS.UnityEngine.Color(0, 1, 0, 1)
+            newAttrs[i].add.gameObject:SetActive(true)
+            newAttrs[i].sub.gameObject:SetActive(false)
+        elseif delta < 0 then
+            newAttrs[i].sub:SetText(FormatAttr(i, delta))
+            newAttrs[i].sub.color = CS.UnityEngine.Color(1, 0, 0, 1)
+            newAttrs[i].sub.gameObject:SetActive(true)
+            newAttrs[i].add.gameObject:SetActive(false)
+        else
+            newAttrs[i].add.gameObject:SetActive(false)
+            newAttrs[i].sub.gameObject:SetActive(false)
+        end
+
+        local rowActive = (oldVal ~= 0 or newVal ~= 0)
+        oldAttrs[i].row.gameObject:SetActive(rowActive)
+        newAttrs[i].row.gameObject:SetActive(rowActive)
+    end
+
+    --战力差值
+    local delta = newItem:GetPower() - oldItem:GetPower()
+    if delta >= 0 then
+        powerDelta:SetText("+" .. tostring(math.ceil(delta)))
+        powerDelta.color = CS.UnityEngine.Color(0, 1, 0, 1)
+    else
+        powerDelta:SetText(tostring(math.ceil(delta)))
+        powerDelta.color = CS.UnityEngine.Color(1, 0, 0, 1)
+    end
+
+    canvas.enabled = true
+end

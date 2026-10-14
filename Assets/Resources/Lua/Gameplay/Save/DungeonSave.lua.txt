@@ -1,0 +1,34 @@
+---@class DungeonSave 副本进度存档模块
+local DungeonSave = {}
+
+---@param context table
+---@return table
+function DungeonSave.Collect(context)
+    local dungeonManager = context.gameManager and context.gameManager.dungeonManager
+    if not dungeonManager then
+        return DungeonSave.Default()
+    end
+    return dungeonManager:CollectProgress()
+end
+
+---@param context table
+---@param data table
+function DungeonSave.Apply(context, data)
+    local dungeonManager = context.gameManager and context.gameManager.dungeonManager
+    if dungeonManager then
+        dungeonManager:ApplyProgress(data)
+    end
+end
+
+---默认副本数据（老存档无 dungeon section 时回落到这里，不会崩老档）
+---@return table
+function DungeonSave.Default()
+    return {
+        cleared = {},
+        clearCount = {},
+        dailySweepCount = 0,
+        sweepDate = "",
+    }
+end
+
+return DungeonSave

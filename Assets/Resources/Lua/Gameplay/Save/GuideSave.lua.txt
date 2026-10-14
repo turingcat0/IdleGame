@@ -1,0 +1,31 @@
+---@class GuideSave 新手引导进度存档模块
+local GuideSave = {}
+
+---@param context table
+---@return table
+function GuideSave.Collect(context)
+    local guideManager = context.gameManager and context.gameManager.guideManager
+    if not guideManager then
+        return GuideSave.Default()
+    end
+    return guideManager:CollectProgress()
+end
+
+---@param context table
+---@param data table
+function GuideSave.Apply(context, data)
+    local guideManager = context.gameManager and context.gameManager.guideManager
+    if guideManager then
+        guideManager:ApplyProgress(data)
+    end
+end
+
+---@return table
+function GuideSave.Default()
+    return {
+        groups = {},
+        steps = {},
+    }
+end
+
+return GuideSave

@@ -1,0 +1,16 @@
+local Skill = require("Gameplay.Skills.Skill")
+local EffectTypes = require("Config.Generated.EffectTypes")
+local EffectFactory = require("Gameplay.Effects.EffectFactory")
+
+---@class ImmortalTotem : Skill
+---不死图腾：释放时给自己一个持续 60 秒的不死图腾效果
+local ImmortalTotem = Skill:extend()
+
+---@param source Entity
+---@param target Entity?
+function ImmortalTotem:OnCast(source, target)
+    local instance = EffectFactory.CreateInstance(EffectTypes.immortal_totem, source, source, 60, { cost = 50 })
+    source:AddEffect(instance)
+end
+
+return ImmortalTotem

@@ -1,0 +1,174 @@
+local Object          = require("Utils.classic")
+local DungeonProgress = require("Gameplay.Dungeon.DungeonProgress")
+local StageConfigs    = require("Config.Generated.Stages")
+local SweepResolver   = require("Gameplay.Dungeon.SweepResolver")
+local EventSystem     = require("Event.EventSystem")
+local EventType       = require("Event.EventType")
+
+---@class DungeonManager 副本服务：解锁/进入/扫荡/掉落发放 + 进度管理
+---@field player Player
+---@field levelManager LevelManager
+---@field uiManager UIManager
+---@field dungeonProgress DungeonProgress
+local DungeonManager = Object:extend()
+
+---@param player Player
+---@param levelManager LevelManager
+---@param uiManager UIManager
+function DungeonManager:New(player, levelManager, uiManager)
+    self.player = player
+    self.levelManager = levelManager
+    self.uiManager = uiManager
+    self.dungeonProgress = DungeonProgress(player)
+
+    EventSystem:RegisterListener(EventType.DungeonCleared, nil, self, DungeonManager.OnDungeonCleared)
+end
+
+---获取所有副本分组 id（按字母序）
+---@return string[]
+function DungeonManager:GetDungeonGroups()
+    local groups = {}
+    local seen = {}
+    for _, sc in pairs(StageConfigs) do
+        if sc.type == "dungeon" and sc.dungeonGroup and not seen[sc.dungeonGroup] then
+            seen[sc.dungeonGroup] = true
+            table.insert(groups, sc.dungeonGroup)
+        end
+    end
+    table.sort(groups)
+    return groups
+end
+
+---获取指定分组下的所有副本（按 id 排序）
+---@param groupId string
+---@return table[] {id=, config=}
+function DungeonManager:GetDungeonsByGroup(groupId)
+    local result = {}
+    for id, sc in pairs(StageConfigs) do
+        if sc.type == "dungeon" and sc.dungeonGroup == groupId then
+            table.insert(result, {id = id, config = sc})
+        end
+    end
+    table.sort(result, function(a, b) return a.id < b.id end)
+    return result
+end
+
+---@param stageId string
+---@return boolean unlocked, integer requiredLevel
+function DungeonManager:IsUnlocked(stageId)
+    return self.dungeonProgress:IsUnlocked(stageId)
+end
+
+---@param stageId string
+---@return boolean
+function DungeonManager:IsCleared(stageId)
+    return self.dungeonProgress:IsCleared(stageId)
+end
+
+---@param stageId string
+---@return boolean
+function DungeonManager:CanSweep(stageId)
+    return self.dungeonProgress:CanSweep(stageId)
+end
+
+---进入副本（转发给 LevelManager，由其做快照+过场）
+---@param stageId string
+function DungeonManager:EnterDungeon(stageId)
+    local unlocked, required = self.dungeonProgress:IsUnlocked(stageId)
+    if not unlocked then
+        print(string.format("[DungeonManager] 副本 %s 未解锁（需要 %d 级）", stageId, required))
+        return
+    end
+    self.levelManager:EnterDungeon(stageId)
+end
+
+---扫荡副本：消耗次数 → 纯函数结算 → 发放经验/水晶/金币 → 触发 DungeonSwept 事件
+---@param stageId string
+function DungeonManager:Sweep(stageId)
+    if not self.dungeonProgress:CanSweep(stageId) then
+        print(string.format("[DungeonManager] 副本 %s 无法扫荡", stageId))
+        return
+    end
+    self.dungeonProgress:ConsumeSweep()
+
+    local GameManager = require("GameManager")
+    local lootManager = GameManager.lootManager
+    local result = SweepResolver.Resolve(stageId, self.player.progression.level, lootManager)
+
+    self.player:AddExp(result.exp)
+    self.player.inventory:AddCrystal(result.crystal)
+    self.player.inventory:AddCoins(result.coins)
+
+    local payload = {
+        stageId = stageId,
+        exp = result.exp,
+        crystal = result.crystal,
+        coins = result.coins,
+        bossItem = result.bossItem,
+    }
+    EventSystem:FireEvent(EventType.DungeonSwept, self, payload)
+end
+
+---DungeonCleared 事件回调：记录首通 + 累加通关次数
+---@param stageId string
+function DungeonManager:OnDungeonCleared(stageId)
+    self.dungeonProgress:MarkCleared(stageId)
+end
+
+---发放 boss 掉落装备（复刻 Drop.lua 的 3 分支逻辑，由 SweepResultUI 确定按钮调用）
+---@param itemInstance ItemInstance
+function DungeonManager:GrantBossItem(itemInstance)
+    if not itemInstance then return end
+    local inventory = self.player.inventory
+    local old = inventory:GetSlot(itemInstance.item.equipmentSlot)
+
+    if not old then
+        --槽位为空：自动装备
+        inventory:Equip(itemInstance)
+    elseif itemInstance:GetPower() <= old:GetPower() then
+        --战力更低或相等：自动分解
+        inventory:DecomposeItem(itemInstance)
+        self.uiManager:PopCrystal()
+    else
+        --战力更高：弹出对比面板
+        self.uiManager:ShowEquipmentCompare(
+            old, itemInstance,
+            function()
+                inventory:Equip(itemInstance)
+                inventory:DecomposeItem(old)
+            end,
+            function()
+                inventory:DecomposeItem(itemInstance)
+            end
+        )
+    end
+end
+
+---@return integer
+function DungeonManager:GetRemainingSweeps()
+    return self.dungeonProgress:GetRemainingSweeps()
+end
+
+---@return integer
+function DungeonManager:GetMaxDailySweep()
+    return self.dungeonProgress:GetMaxDailySweep()
+end
+
+---@return table
+function DungeonManager:CollectProgress()
+    return self.dungeonProgress:Collect()
+end
+
+---@param data table
+function DungeonManager:ApplyProgress(data)
+    if data then
+        self.dungeonProgress:Apply(data)
+    end
+end
+
+---Editor 测试用：重置当日扫荡次数
+function DungeonManager:ResetDailySweepCount()
+    self.dungeonProgress:ResetDailySweepCount()
+end
+
+return DungeonManager

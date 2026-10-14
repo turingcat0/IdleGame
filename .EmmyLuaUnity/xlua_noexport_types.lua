@@ -1,0 +1,56 @@
+---@meta
+
+--- Unexported types referenced in exported types
+--- These types are defined as aliases to 'any' for type safety
+
+---@alias Injection any
+---@alias System.Action any
+---@alias System.Collections.Generic.ICollection any
+---@alias System.Collections.Generic.IComparer any
+---@alias System.Collections.Generic.IDictionary any
+---@alias System.Collections.Generic.IEnumerable any
+---@alias System.Collections.Generic.IEqualityComparer any
+---@alias System.Collections.Generic.IList any
+---@alias System.Collections.Generic.IReadOnlyCollection any
+---@alias System.Collections.Generic.IReadOnlyDictionary any
+---@alias System.Collections.Generic.IReadOnlyList any
+---@alias System.Collections.Generic.KeyValuePair any
+---@alias System.Collections.ICollection any
+---@alias System.Collections.IDictionary any
+---@alias System.Collections.IEnumerable any
+---@alias System.Collections.IList any
+---@alias System.Collections.ObjectModel.ReadOnlyCollection any
+---@alias System.Comparison any
+---@alias System.Converter any
+---@alias System.IDisposable any
+---@alias System.Predicate any
+---@alias System.Runtime.Serialization.IDeserializationCallback any
+---@alias System.Runtime.Serialization.ISerializable any
+---@alias System.Runtime.Serialization.SerializationInfo any
+---@alias System.Runtime.Serialization.StreamingContext any
+---@alias System.Security.Cryptography.HashAlgorithm any
+---@alias System.Security.Cryptography.ICryptoTransform any
+---@alias System.Text.Encoding any
+---@alias System.Type any
+---@alias System.Uri any
+---@alias T any
+---@alias TKey any
+---@alias TOutput any
+---@alias TValue any
+---@alias Unity.Collections.NativeArray any
+---@alias UnityEngine.AsyncOperation any
+---@alias UnityEngine.AudioType any
+---@alias UnityEngine.CachedAssetBundle any
+---@alias UnityEngine.EventSystems.UIBehaviour any
+---@alias UnityEngine.Hash128 any
+---@alias UnityEngine.MonoBehaviour any
+---@alias UnityEngine.Networking.CertificateHandler any
+---@alias UnityEngine.Networking.IMultipartFormSection any
+---@alias UnityEngine.Networking.UnityWebRequest.Result any
+---@alias UnityEngine.Networking.UnityWebRequestAsyncOperation any
+---@alias UnityEngine.Networking.UploadHandler any
+---@alias UnityEngine.Object any
+---@alias UnityEngine.RectTransform any
+---@alias UnityEngine.TextAsset any
+---@alias UnityEngine.WWWForm any
+---@alias XLua.LuaTable any

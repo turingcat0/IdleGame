@@ -1,0 +1,295 @@
+local GameManager = require("GameManager")
+
+--- 当前场景层级：
+--- CombatStatsWindow
+--- └ Background/WindowPanel
+---    ├ TopBar/{Title, CloseButton/{Frame, Image}}
+---    ├ BookmarkBar/{Bookmark_Effects, Bookmark_Damage, Bookmark_Summary}/{Text}
+---    └ ScrollView/{Background, Viewport/{Content/StatItem_*/{Label, Value}}, ModeBar/{ModeHeader, SessionButton, CareerButton}}
+
+---@type CS.UnityEngine.MonoBehaviour
+local self = self
+
+-- 书签按钮
+local bookmarkEffects = nil
+local bookmarkDamage = nil
+local bookmarkSummary = nil
+local bookmarkEffectsText = nil
+local bookmarkDamageText = nil
+local bookmarkSummaryText = nil
+
+-- 模式切换
+local sessionButton = nil
+local careerButton = nil
+local modeHeader = nil
+
+-- 条目容器
+local statsListContent = nil
+
+-- 当前状态
+local currentMode = "session"
+local currentTab = "effects"
+
+-- 条目定义
+local StatItems = {
+    -- 效果页
+    { id = "ShieldAdded",     label = "护盾施加次数", tab = "effects", getter = function(s) return s.effectsAdded.shield or 0 end },
+    { id = "ShieldRemoved",   label = "护盾移除次数", tab = "effects", getter = function(s) return s.effectsRemoved.shield or 0 end },
+    { id = "PoisonAdded",     label = "中毒施加次数", tab = "effects", getter = function(s) return s.effectsAdded.poison or 0 end },
+    { id = "PoisonRemoved",   label = "中毒移除次数", tab = "effects", getter = function(s) return s.effectsRemoved.poison or 0 end },
+    { id = "StunAdded",       label = "眩晕施加次数", tab = "effects", getter = function(s) return s.effectsAdded.stun or 0 end },
+    { id = "StunRemoved",     label = "眩晕移除次数", tab = "effects", getter = function(s) return s.effectsRemoved.stun or 0 end },
+    { id = "StatModAdded",    label = "属性施加次数", tab = "effects", getter = function(s) return s.effectsAdded.stat_mod or 0 end },
+    { id = "StatModRemoved",  label = "属性移除次数", tab = "effects", getter = function(s) return s.effectsRemoved.stat_mod or 0 end },
+    { id = "StackChanges",    label = "叠层变化次数", tab = "effects", getter = function(s) return s.effectStackChanges or 0 end },
+
+    -- 伤害页
+    { id = "EffectDamageDealt",    label = "效果总伤害", tab = "damage", getter = function(s) return math.ceil(s.effectDamageDealt or 0) end },
+    { id = "EffectDamageAbsorbed", label = "效果总吸收", tab = "damage", getter = function(s) return math.ceil(s.effectDamageAbsorbed or 0) end },
+
+    -- 综合页
+    { id = "TotalPlayTime", label = "总游戏时长(秒)", tab = "summary", mode = "career", getter = function(s) return s.totalPlayTime or 0 end },
+    { id = "DeathCount",    label = "死亡次数",         tab = "summary", mode = "career", getter = function(s) return s.deathCount or 0 end },
+    { id = "SessionEmpty",  label = "本局暂无综合统计", tab = "summary", mode = "session" },
+}
+
+local TabNames = {
+    effects = "效果",
+    damage = "伤害",
+    summary = "综合",
+}
+
+local ModeNames = {
+    session = "本局",
+    career = "生涯",
+}
+
+-- 书签选中效果颜色（激活：背景 D7BFA5，字体 513F2E；非激活：反色）
+local BookmarkBgActive    = CS.UnityEngine.Color(215 / 255, 191 / 255, 165 / 255, 1)
+local BookmarkTextActive  = CS.UnityEngine.Color( 81 / 255,  63 / 255,  46 / 255, 1)
+local BookmarkBgInactive  = CS.UnityEngine.Color( 81 / 255,  63 / 255,  46 / 255, 1)
+local BookmarkTextInactive= CS.UnityEngine.Color(215 / 255, 191 / 255, 165 / 255, 1)
+
+local function GetStatsData()
+    local tracker = GameManager.combatStatsTracker
+    if not tracker then
+        return nil
+    end
+    if currentMode == "session" then
+        return tracker:GetStats()
+    else
+        -- 生涯：合并 GameManager 元数据与 CombatStatsTracker 生涯统计
+        local career = tracker:GetCareerStats()
+        return {
+            totalPlayTime = GameManager.totalPlayTime or 0,
+            deathCount = GameManager.deathCount or 0,
+            effectsAdded = career.effectsAdded,
+            effectsRemoved = career.effectsRemoved,
+            effectStackChanges = career.effectStackChanges,
+            effectDamageDealt = career.effectDamageDealt,
+            effectDamageAbsorbed = career.effectDamageAbsorbed,
+        }
+    end
+end
+
+local function SetBookmarkActive(tab)
+    currentTab = tab
+
+    local function SetBookmarkVisual(btn, text, active)
+        if not btn then
+            return
+        end
+        local img = btn:GetComponent(typeof(CS.UnityEngine.UI.Image))
+        if img then
+            img.color = active and BookmarkBgActive or BookmarkBgInactive
+        end
+        if text then
+            text.color = active and BookmarkTextActive or BookmarkTextInactive
+        end
+    end
+
+    SetBookmarkVisual(bookmarkEffects, bookmarkEffectsText, tab == "effects")
+    SetBookmarkVisual(bookmarkDamage, bookmarkDamageText, tab == "damage")
+    SetBookmarkVisual(bookmarkSummary, bookmarkSummaryText, tab == "summary")
+
+    Refresh()
+end
+
+local function SetMode(mode)
+    currentMode = mode
+
+    local function SetColor(btn, color)
+        if not btn then
+            return
+        end
+        local img = btn:GetComponent(typeof(CS.UnityEngine.UI.Image))
+        if img then
+            img.color = CS.UnityEngine.Color(color.r, color.g, color.b, color.a)
+        end
+    end
+
+    local activeColor = { r = 0.35, g = 0.55, b = 0.85, a = 1 }
+    local inactiveColor = { r = 0.18, g = 0.18, b = 0.18, a = 1 }
+    SetColor(sessionButton, mode == "session" and activeColor or inactiveColor)
+    SetColor(careerButton,  mode == "career" and activeColor or inactiveColor)
+
+    if modeHeader then
+        modeHeader.text = "模式: " .. ModeNames[mode]
+    end
+
+    -- 切换到生涯/本局时，如果当前页没有对应条目就切到第一个有内容的页
+    local hasItemForMode = false
+    for _, item in ipairs(StatItems) do
+        if item.tab == currentTab and (item.mode == nil or item.mode == mode) then
+            hasItemForMode = true
+            break
+        end
+    end
+    if not hasItemForMode then
+        local fallbackTabs = { "effects", "damage", "summary" }
+        local firstValidTab = nil
+        for _, tabName in ipairs(fallbackTabs) do
+            for _, item in ipairs(StatItems) do
+                if item.tab == tabName and (item.mode == nil or item.mode == mode) then
+                    firstValidTab = tabName
+                    break
+                end
+            end
+            if firstValidTab then
+                break
+            end
+        end
+        SetBookmarkActive(firstValidTab or "effects")
+    else
+        Refresh()
+    end
+end
+
+function Refresh()
+    if not statsListContent then
+        return
+    end
+
+    local stats = GetStatsData()
+
+    for i = 0, statsListContent.childCount - 1 do
+        local child = statsListContent:GetChild(i)
+        child.gameObject:SetActive(false)
+    end
+
+    for _, item in ipairs(StatItems) do
+        if item.tab == currentTab and (item.mode == nil or item.mode == currentMode) then
+            local go = statsListContent:Find("StatItem_" .. item.id)
+            if go then
+                go.gameObject:SetActive(true)
+                local labelGo = go:Find("Label")
+                local valueGo = go:Find("Value")
+                if labelGo and valueGo then
+                    local label = labelGo:GetComponent(typeof(CS.TMPro.TextMeshProUGUI))
+                    local value = valueGo:GetComponent(typeof(CS.TMPro.TextMeshProUGUI))
+                    label.text = item.label
+                    if item.getter and stats then
+                        value.text = tostring(item.getter(stats))
+                    else
+                        value.text = "-"
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function SafeFind(path, expectedType)
+    local obj = self.transform:Find(path)
+    if not obj then
+        print("[CombatStatsWindow] 找不到节点: " .. path)
+        return nil
+    end
+    if expectedType then
+        local comp = obj:GetComponent(expectedType)
+        if not comp then
+            print("[CombatStatsWindow] 节点 " .. path .. " 缺少组件: " .. tostring(expectedType))
+            return nil
+        end
+        return comp
+    end
+    return obj
+end
+
+local function GetChildText(btn)
+    if not btn then
+        return nil
+    end
+    local t = btn.transform:Find("Text")
+    if not t then
+        return nil
+    end
+    return t:GetComponent(typeof(CS.TMPro.TextMeshProUGUI))
+end
+
+function Awake()
+    bookmarkEffects = SafeFind("Background/WindowPanel/BookmarkBar/Bookmark_Effects", typeof(CS.UnityEngine.UI.Button))
+    bookmarkDamage = SafeFind("Background/WindowPanel/BookmarkBar/Bookmark_Damage", typeof(CS.UnityEngine.UI.Button))
+    bookmarkSummary = SafeFind("Background/WindowPanel/BookmarkBar/Bookmark_Summary", typeof(CS.UnityEngine.UI.Button))
+
+    bookmarkEffectsText = GetChildText(bookmarkEffects)
+    bookmarkDamageText = GetChildText(bookmarkDamage)
+    bookmarkSummaryText = GetChildText(bookmarkSummary)
+
+    sessionButton = SafeFind("Background/WindowPanel/ScrollView/ModeBar/SessionButton", typeof(CS.UnityEngine.UI.Button))
+    careerButton = SafeFind("Background/WindowPanel/ScrollView/ModeBar/CareerButton", typeof(CS.UnityEngine.UI.Button))
+    modeHeader = SafeFind("Background/WindowPanel/ScrollView/ModeBar/ModeHeader", typeof(CS.TMPro.TextMeshProUGUI))
+
+    statsListContent = SafeFind("Background/WindowPanel/ScrollView/Viewport/Content")
+
+    local closeButton = SafeFind("Background/WindowPanel/TopBar/CloseButton", typeof(CS.UnityEngine.UI.Button))
+    if closeButton then
+        closeButton.onClick:AddListener(Hide)
+    end
+
+    if bookmarkEffects then
+        bookmarkEffects.onClick:AddListener(function() SetBookmarkActive("effects") end)
+    end
+    if bookmarkDamage then
+        bookmarkDamage.onClick:AddListener(function() SetBookmarkActive("damage") end)
+    end
+    if bookmarkSummary then
+        bookmarkSummary.onClick:AddListener(function() SetBookmarkActive("summary") end)
+    end
+
+    if sessionButton then
+        sessionButton.onClick:AddListener(function() SetMode("session") end)
+    end
+    if careerButton then
+        careerButton.onClick:AddListener(function() SetMode("career") end)
+    end
+end
+
+function Start()
+    local canvas = self:GetComponent(typeof(CS.UnityEngine.Canvas))
+    if canvas then
+        canvas.enabled = false
+    end
+end
+
+function Show()
+    local canvas = self:GetComponent(typeof(CS.UnityEngine.Canvas))
+    if canvas then
+        canvas.enabled = true
+    end
+
+    if not bookmarkEffects or not bookmarkDamage or not bookmarkSummary then
+        print("[CombatStatsWindow] UI 节点缺失，请删除旧 CombatStatsUI 后重新生成")
+        return
+    end
+
+    SetMode("session")
+    SetBookmarkActive("effects")
+end
+
+function Hide()
+    local canvas = self:GetComponent(typeof(CS.UnityEngine.Canvas))
+    if canvas then
+        canvas.enabled = false
+    end
+end

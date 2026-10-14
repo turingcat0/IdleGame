@@ -1,0 +1,46 @@
+local Object = require("Utils.classic")
+local EventSystem = require("Event.EventSystem")
+local EventType = require("Event.EventType")
+
+---@class LogicScene 逻辑场景：约定优于配置，通过 <sceneId>_SpawnPoint / <sceneId>_Boarder 自动读取
+---@field sceneId string
+---@field spawnX number  出生点 X
+---@field spawnY number  地面 Y
+---@field leftBorderX number  左边界 X
+---@field rightBorderX number 右边界 X
+---@field width number   世界宽度 (rightBorderX - leftBorderX)
+local LogicScene = Object:extend()
+
+---构造时按约定查找场景物体：<sceneId>_SpawnPoint / <sceneId>_LeftBorder / <sceneId>_RightBorder
+---@param sceneId string
+function LogicScene:New(sceneId)
+    self.sceneId = sceneId
+    local root = CS.UnityEngine.GameObject.Find("SceneMarkers")
+    if not root then return end
+    local spawnTf = root.transform:Find(sceneId .. "_SpawnPoint")
+    local leftTf = root.transform:Find(sceneId .. "_LeftBorder")
+    local rightTf = root.transform:Find(sceneId .. "_RightBorder")
+    if not spawnTf or not leftTf or not rightTf then return end
+    self.spawnX = spawnTf.position.x
+    self.spawnY = spawnTf.position.y
+    self.leftBorderX = leftTf.position.x
+    self.rightBorderX = rightTf.position.x
+    self.width = self.rightBorderX - self.leftBorderX
+end
+
+---检查玩家是否越过边界，若越过则 wrap 回来并广播事件
+---@param player Player
+function LogicScene:CheckAndWrap(player)
+    if not self.width then return end
+    if player.position > self.rightBorderX then
+        local delta = -self.width
+        player.position = player.position + delta
+        EventSystem:FireEvent(EventType.PlayerReachedBorder, nil, delta)
+    elseif player.position < self.leftBorderX then
+        local delta = self.width
+        player.position = player.position + delta
+        EventSystem:FireEvent(EventType.PlayerReachedBorder, nil, delta)
+    end
+end
+
+return LogicScene

@@ -1,0 +1,13 @@
+---@enum StageState 关卡战斗状态机枚举（从 LevelManager 外移，供 UI 层共享）
+local StageState = {
+    WaitingStart  = 0,  --- 关卡已加载，等待玩家点击键 wakeup
+    InProgress    = 1,  --- 波次连续推进中
+    BossReady     = 2,  --- 全波清完，farming + boss 入口按钮
+    BossBattle    = 3,  --- boss 战进行中
+    BeforePortal  = 4,  --- 入口/出口传送门已生成，玩家醒着跑入
+    Transitioning = 5,  --- 过场动画播放中（黑屏，玩家 idle 冻结）
+    AfterBoss     = 6,  --- boss 死后出口传送门等待，玩家醒着跑入
+    DungeonFailed = 7,  --- 副本内死亡，等待玩家点击死亡面板返回
+}
+
+return StageState

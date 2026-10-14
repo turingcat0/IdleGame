@@ -1,0 +1,66 @@
+local GameManager = require("GameManager")
+
+---@type CS.UnityEngine.MonoBehaviour
+local self = self
+
+local canvasGroup = nil
+local expText = nil
+local crystalText = nil
+local coinText = nil
+local continueButton = nil
+
+function Start()
+    canvasGroup = self.gameObject:GetComponent(typeof(CS.UnityEngine.CanvasGroup))
+
+    local expTf = self.transform:Find("Panel/ExpLabel/Number")
+    if expTf then expText = expTf:GetComponent(typeof(CS.TMPro.TextMeshProUGUI)) end
+
+    local crystalTf = self.transform:Find("Panel/CrystalSlot/Count")
+    if crystalTf then crystalText = crystalTf:GetComponent(typeof(CS.TMPro.TextMeshProUGUI)) end
+
+    local coinTf = self.transform:Find("Panel/CoinSlot/Count")
+    if coinTf then coinText = coinTf:GetComponent(typeof(CS.TMPro.TextMeshProUGUI)) end
+
+    local btnTf = self.transform:Find("Panel/ConfirmButton")
+    if btnTf then
+        continueButton = btnTf:GetComponent(typeof(CS.UnityEngine.UI.Button))
+    end
+    if continueButton then
+        continueButton.onClick:AddListener(OnContinueClicked)
+    end
+end
+
+function Update()
+    local lm = GameManager.levelManager
+    local s = lm and lm.settlement or nil
+
+    if s then
+        if canvasGroup then
+            canvasGroup.alpha = 1
+            canvasGroup.interactable = true
+            canvasGroup.blocksRaycasts = true
+        end
+        if expText then expText.text = tostring(s.exp) end
+        if crystalText then crystalText.text = "x" .. tostring(s.crystal) end
+        if coinText then coinText.text = "x" .. tostring(s.coins) end
+    else
+        if canvasGroup then
+            canvasGroup.alpha = 0
+            canvasGroup.interactable = false
+            canvasGroup.blocksRaycasts = false
+        end
+    end
+end
+
+function OnContinueClicked()
+    local lm = GameManager.levelManager
+    if lm then
+        lm:OnSettlementContinue()
+    end
+end
+
+function OnDestroy()
+    if continueButton then
+        continueButton.onClick:RemoveListener(OnContinueClicked)
+    end
+end

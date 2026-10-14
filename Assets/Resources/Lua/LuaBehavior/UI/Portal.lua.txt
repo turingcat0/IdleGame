@@ -1,0 +1,49 @@
+local GameManager = require("GameManager")
+
+---@type CS.UnityEngine.MonoBehaviour
+local self = self
+
+local StageState = require("Gameplay.StageState")
+
+local rendererGo = nil
+local collider = nil
+
+function Start()
+    rendererGo = self.transform:Find("Renderer") and self.transform:Find("Renderer").gameObject or nil
+    collider = self.gameObject:GetComponent(typeof(CS.UnityEngine.Collider2D))
+end
+
+function Update()
+    local lm = GameManager.levelManager
+    if not lm then return end
+
+    local st = lm.state
+    --- renderer 在整段过渡期间常亮（fade-out 前不隐藏→不穿帮），过渡结束才灭
+    local visible = (st == StageState.BeforePortal or st == StageState.AfterBoss or st == StageState.Transitioning)
+    --- collider 仅等待进入时开；进 Transitioning 立即关（防重触发 + 出口不触发）
+    local triggerable = (st == StageState.BeforePortal or st == StageState.AfterBoss)
+
+    if rendererGo then
+        rendererGo:SetActive(visible)
+    end
+    if collider then
+        collider.enabled = triggerable
+    end
+
+    --- 传送门可见时跟随 portalX 定位 + 旋转
+    if visible and lm.portalX then
+        local py = lm.portalY or 0
+        self.transform.position = CS.UnityEngine.Vector3(lm.portalX, py, 0)
+        local dt = CS.UnityEngine.Time.deltaTime
+        self.transform:Rotate(0, 0, -180 * dt)
+    end
+end
+
+function OnTriggerEnter2D(other)
+    if other.gameObject.name == "Player" then
+        local lm = GameManager.levelManager
+        if lm then
+            lm:OnPortalEntered()
+        end
+    end
+end

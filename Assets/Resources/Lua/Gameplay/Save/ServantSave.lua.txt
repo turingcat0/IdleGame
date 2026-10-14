@@ -1,0 +1,83 @@
+---@class ServantSave 随从解锁状态与上阵配置存档模块
+local ServantSave = {}
+
+---槽位是稀疏的（允许空位），存成 index 字符串 → 随从 id 的表，避免 json 数组带洞
+---@param loadout ServantLoadout
+---@param kind string
+---@param count integer
+---@return table<string, string>
+local function CollectSlots(loadout, kind, count)
+    local slots = {}
+    for index = 1, count do
+        local servant = loadout:Get(kind, index)
+        if servant then
+            slots[tostring(index)] = servant.id
+        end
+    end
+    return slots
+end
+
+---收集随从状态
+---@param context table
+---@return table
+function ServantSave.Collect(context)
+    ---@type ServantLoadout
+    local loadout = context.player.servantLoadout
+
+    local unlocked = {}
+    for id, isUnlocked in pairs(loadout.unlocked) do
+        if isUnlocked then
+            table.insert(unlocked, id)
+        end
+    end
+
+    local levels = {}
+    for id, level in pairs(loadout.levels) do
+        if level > 1 then levels[id] = level end
+    end
+
+    return {
+        unlocked = unlocked,
+        mainSlots = CollectSlots(loadout, "main", loadout:MainSlotCount()),
+        subSlots = CollectSlots(loadout, "sub", loadout:SubSlotCount()),
+        levels = levels,
+    }
+end
+
+---将存档数据应用到随从配置
+---@param context table
+---@param data table
+function ServantSave.Apply(context, data)
+    ---@type ServantLoadout
+    local loadout = context.player.servantLoadout
+
+    --- 只做加锁的反向操作：存档里有的解锁掉，没提到的不动。
+    --- 初始随从（guard）在 ServantLoadout:New() 里解锁，抽奖获得的随从在 ServantAcquired 时解锁，
+    --- 读档时把存档里记录的解锁状态重新 Apply 上去即可
+    for _, id in ipairs(data.unlocked or {}) do
+        loadout:Unlock(id)
+    end
+
+    for index = 1, loadout:MainSlotCount() do
+        loadout:Equip("main", index, (data.mainSlots or {})[tostring(index)])
+    end
+    for index = 1, loadout:SubSlotCount() do
+        loadout:Equip("sub", index, (data.subSlots or {})[tostring(index)])
+    end
+    for id, level in pairs(data.levels or {}) do
+        loadout:SetLevel(id, tonumber(level) or 1)
+    end
+end
+
+---默认随从数据
+---@return table
+function ServantSave.Default()
+    return {
+        unlocked = {},
+        mainSlots = {},
+        subSlots = {},
+        levels = {},
+    }
+end
+
+return ServantSave

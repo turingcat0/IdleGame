@@ -1,0 +1,8 @@
+---先硬编码下， 之后有需求了再改
+---@enum ModifierType
+local ModifierType = {
+    FlatAdd = 1,
+    Multiply = 2
+}
+
+return ModifierType

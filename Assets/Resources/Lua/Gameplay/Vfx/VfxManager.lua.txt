@@ -1,0 +1,42 @@
+local Object = require("Utils.classic")
+local EventSystem = require("Event.EventSystem")
+local EventType   = require("Event.EventType")
+local VfxSpawner  = require("Gameplay.Vfx.VfxSpawner")
+
+---@class VfxManager 监听战斗生命周期事件，按技能 id 约定命名播特效。
+--- 战斗层/数据层均不感知本类的存在（仅靠事件解耦）。
+---@field spawner VfxSpawner
+local VfxManager = Object:extend()
+
+function VfxManager:New()
+    self.spawner = VfxSpawner()
+    EventSystem:RegisterListener(EventType.SkillCast, nil, self, VfxManager.OnSkillCast)
+    EventSystem:RegisterListener(EventType.SkillHit, nil, self, VfxManager.OnSkillHit)
+    EventSystem:RegisterListener(EventType.SkillAoeBurst, nil, self, VfxManager.OnSkillAoeBurst)
+end
+
+---@param source Entity
+---@param skill Skill
+---释放特效 id 约定：skill_<skillId>_cast（文件不存在则静默跳过）
+function VfxManager:OnSkillCast(source, skill)
+    self.spawner:Spawn("skill_"..skill.id.."_cast", source.position)
+end
+
+---@param target Entity
+---@param source Entity
+---@param skill Skill
+---命中特效 id 约定：skill_<skillId>_hit（文件不存在则静默跳过）
+function VfxManager:OnSkillHit(target, source, skill)
+    self.spawner:Spawn("skill_"..skill.id.."_hit", target.position)
+end
+
+---aoe 爆炸特效 id 约定：skill_<skillId>_aoe（文件不存在则静默跳过）
+---@param position number 爆心世界 x
+---@param aoeRange number 溅射半径（预留，特效可按半径缩放）
+---@param skill Skill
+function VfxManager:OnSkillAoeBurst(position, aoeRange, skill)
+    if not skill then return end
+    self.spawner:Spawn("skill_"..skill.id.."_aoe", position)
+end
+
+return VfxManager

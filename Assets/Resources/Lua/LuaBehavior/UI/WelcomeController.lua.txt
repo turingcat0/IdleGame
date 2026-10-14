@@ -1,0 +1,93 @@
+--- WelcomeController: 控制欢迎界面流程
+--- Init 淡入 → 停留 → 淡出 → 显示 StartGame → 点击按钮加载 main 场景
+--- 挂载在 Init 物体上（LuaBehaviour）
+
+---@type CS.UnityEngine.MonoBehaviour
+local self = self
+
+local SceneManager = CS.UnityEngine.SceneManagement.SceneManager
+
+local initCanvasGroup = nil
+local startGameGo = nil
+local startButton = nil
+
+-- 淡入淡出参数
+local FadeDuration = 0.5   -- 淡入/淡出各 0.5 秒
+local HoldDuration = 0.8   -- 完全显示后停留 0.8 秒
+
+-- 状态机: fadein → hold → fadeout → idle
+local phase = "fadein"
+local el = 0               -- 当前阶段已过秒数
+
+function Start()
+    -- 获取 Init 上的 CanvasGroup（场景中已挂载）
+    initCanvasGroup = self.gameObject:GetComponent(typeof(CS.UnityEngine.CanvasGroup))
+    if not initCanvasGroup then
+        print("[WelcomeController] Init 上未找到 CanvasGroup，请检查场景设置")
+        return
+    end
+    initCanvasGroup.alpha = 0
+    initCanvasGroup.interactable = false
+    initCanvasGroup.blocksRaycasts = false
+
+    -- 查找 StartGame（场景中需处于激活状态，脚本会立即隐藏它）
+    startGameGo = CS.UnityEngine.GameObject.Find("StartGame")
+    if startGameGo then
+        local btnTf = startGameGo.transform:Find("Button")
+        if btnTf then
+            startButton = btnTf:GetComponent(typeof(CS.UnityEngine.UI.Button))
+        end
+        if startButton then
+            startButton.onClick:AddListener(OnStartButtonClicked)
+        else
+            print("[WelcomeController] 未找到 StartGame/Button 组件")
+        end
+        -- 隐藏 StartGame，等 Init 淡出后再显示
+        startGameGo:SetActive(false)
+    else
+        print("[WelcomeController] 未找到 StartGame 物体")
+    end
+end
+
+function Update()
+    if phase == "idle" or not initCanvasGroup then return end
+
+    local dt = CS.UnityEngine.Time.deltaTime
+    el = el + dt
+
+    if phase == "fadein" then
+        initCanvasGroup.alpha = math.min(1, el / FadeDuration)
+        if el >= FadeDuration then
+            initCanvasGroup.alpha = 1
+            phase = "hold"
+            el = 0
+        end
+    elseif phase == "hold" then
+        initCanvasGroup.alpha = 1
+        if el >= HoldDuration then
+            phase = "fadeout"
+            el = 0
+        end
+    elseif phase == "fadeout" then
+        initCanvasGroup.alpha = math.max(0, 1 - el / FadeDuration)
+        if el >= FadeDuration then
+            initCanvasGroup.alpha = 0
+            phase = "idle"
+            el = 0
+            -- 显示 StartGame
+            if startGameGo then
+                startGameGo:SetActive(true)
+            end
+        end
+    end
+end
+
+function OnStartButtonClicked()
+    SceneManager.LoadScene("main")
+end
+
+function OnDestroy()
+    if startButton then
+        startButton.onClick:RemoveListener(OnStartButtonClicked)
+    end
+end

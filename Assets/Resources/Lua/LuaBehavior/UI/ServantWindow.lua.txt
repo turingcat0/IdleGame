@@ -1,0 +1,407 @@
+local GameManager = require("GameManager")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+local ServantAura = require("Gameplay.Entities.Servants.ServantAura")
+local EventSystem = require("Event.EventSystem")
+local EventType = require("Event.EventType")
+
+--- 需要的节点结构（当前场景）：
+--- ServantWindow (Canvas + LuaBehaviour)
+--- └ Background/WindowPanel
+---    ├ TopBar/{Title, CloseButton/{Frame, Image}}
+---    ├ DetailCard/{Detail, Potrait, UpgradeButton/{Text}}
+---    ├ SlotsPanel/{LabelMain, MainSlots/SlotMain1..3/{Frame, Potrait, Name, Level, Empty},
+---    │           LabelSub, SubSlots/SlotMain1..5/{Frame, Potrait, Name, Level, Empty}}
+---    ├ LabelList
+---    └ ScrollView/Viewport[/Content]   （列表容器，运行时用 Prefabs/ServantSlot 填充）
+--- Prefabs/ServantSlot: 自身带 Button + Image，子节点 Frame / Potrait / Name / Level / Occupy
+---
+--- 操作模型（槽位驱动）：
+--- 1. 点槽位 = 选中该槽位（待操作），槽位描边亮起；槽位里有人时同时把他显示到详情卡
+--- 2. 待操作槽位亮着时点随从卡 = 放进该槽位（原本有人就替换，被换下的人挪去空出来的槽位）
+--- 3. 再点一次同一个槽位 = 有人则下阵、空槽则取消。除此之外任何点击都不会改动编队
+--- 4. 没有待操作槽位时点随从卡 = 只看详情，不改编队
+
+---@type CS.UnityEngine.MonoBehaviour
+local self = self
+
+--- 列表容器 Transform（优先取 Viewport 下的 Content，没有则直接用 Viewport）
+local listContainer = nil
+local detailText = nil
+local detailPortrait = nil
+--- 槽位缓存：{ button, image, baseColor, portrait, nameText, levelText, empty }
+local slotEntries = { main = {}, sub = {} }
+--- 列表项，按随从 id 索引
+local listItems = {}
+local listBuilt = false
+--- 详情卡当前展示的随从 id
+local selectedId = nil
+--- 待操作槽位：点它一次亮起，再点随从卡就放进这里
+local pendingKind, pendingIndex = nil, nil
+
+--- 待放入 / 列表选中的高亮色
+local ColHighlight = { r = 1, g = 0.80, b = 0.32, a = 1 }
+--- 「再点一次就下阵」的警示色
+local ColWarn = { r = 0.86, g = 0.36, b = 0.18, a = 1 }
+
+local SlotKindNames = { main = "主战位", sub = "附属位" }
+local SlotKindShort = { main = "主战", sub = "附属" }
+
+local function GetLoadout()
+    return GameManager.player.servantLoadout
+end
+
+local function SafeFind(path, expectedType)
+    local obj = self.transform:Find(path)
+    if not obj then
+        error("[ServantWindow] 找不到节点: " .. path)
+    end
+    if expectedType then
+        local comp = obj:GetComponent(expectedType)
+        if not comp then
+            error("[ServantWindow] 节点 " .. path .. " 缺少组件: " .. tostring(expectedType))
+        end
+        return comp
+    end
+    return obj
+end
+
+local function SafeFindChild(parent, path, expectedType)
+    local node = parent:Find(path)
+    if not node then
+        error("[ServantWindow] 找不到子节点: " .. path)
+    end
+    if expectedType then
+        local comp = node:GetComponent(expectedType)
+        if not comp then
+            error("[ServantWindow] 子节点 " .. path .. " 缺少组件: " .. tostring(expectedType))
+        end
+        return comp
+    end
+    return node
+end
+
+---@param node CS.UnityEngine.Transform
+---@return CS.UnityEngine.UI.Image
+local function GetOrAddImage(node)
+    local img = node:GetComponent(typeof(CS.UnityEngine.UI.Image))
+    if not img then
+        img = node.gameObject:AddComponent(typeof(CS.UnityEngine.UI.Image))
+    end
+    return img
+end
+
+---记下美术在 prefab / 场景里配好的原色，取消高亮时恢复它，不在代码里另写一套配色
+---@param image CS.UnityEngine.UI.Image
+local function CaptureColor(image)
+    local c = image.color
+    return { r = c.r, g = c.g, b = c.b, a = c.a }
+end
+
+---@param image CS.UnityEngine.UI.Image
+---@param color table
+local function ApplyColor(image, color)
+    image.color = CS.UnityEngine.Color(color.r, color.g, color.b, color.a)
+end
+
+---@param image CS.UnityEngine.UI.Image
+---@param servantId string
+local function SetPortrait(image, servantId)
+    local sprite = CS.UnityEngine.Resources.Load("Textures/" .. servantId, typeof(CS.UnityEngine.Sprite))
+    if sprite then
+        image.sprite = sprite
+        image.enabled = true
+    else
+        image.sprite = nil
+        image.enabled = false
+    end
+end
+
+---@param servant Servant
+---@return string
+local function DescribeServant(servant)
+    return string.format(
+        "%s\n攻击 %d  防御 %d\n生命 %d  法力 %d\n速度 %.1f\n光环: %s\n普攻: %s\n技能: %s",
+        servant.name,
+        servant.attributes[AttributeType.Attack]:GetFinalValue(),
+        servant.attributes[AttributeType.Defense]:GetFinalValue(),
+        servant.attributes[AttributeType.MaxHealth]:GetFinalValue(),
+        servant.attributes[AttributeType.MaxMana]:GetFinalValue(),
+        servant.attributes[AttributeType.Speed]:GetFinalValue(),
+        ServantAura.NameOf(servant),
+        servant.normalSkill.name,
+        servant.combatSkill.name)
+end
+
+---@param kind string
+---@param index integer
+---@return string
+local function SlotLabel(kind, index)
+    return string.format("%s %d", SlotKindNames[kind], index)
+end
+
+---列表卡上的上阵状态角标
+---@param id string
+---@return string
+local function OccupyLabel(loadout, id)
+    local kind, index = loadout:FindSlot(id)
+    if not kind then
+        return "未上阵"
+    end
+    return SlotKindShort[kind] .. index
+end
+
+
+---@param kind string
+---@param index integer
+local function IsPending(kind, index)
+    return pendingKind == kind and pendingIndex == index
+end
+
+---点槽位只选中、不改编队；只有连点同一个已上阵的槽位才让人下阵
+---@param kind string
+---@param index integer
+local function OnSlotClicked(kind, index)
+    local loadout = GetLoadout()
+    local occupant = loadout:Get(kind, index)
+
+    if IsPending(kind, index) then
+        pendingKind, pendingIndex = nil, nil
+        if occupant then
+            loadout:Unequip(kind, index)
+        end
+    else
+        pendingKind, pendingIndex = kind, index
+        if occupant then
+            selectedId = occupant.id
+        end
+    end
+    Refresh()
+end
+
+---@param id string
+local function OnItemClicked(id)
+    local loadout = GetLoadout()
+
+    if pendingKind then
+        local kind, index = pendingKind, pendingIndex
+        pendingKind, pendingIndex = nil, nil
+
+        local displaced = loadout:Get(kind, index)
+        local fromKind, fromIndex = loadout:FindSlot(id)
+        loadout:Equip(kind, index, id)
+        --- 换人时把被顶掉的那位挪进对方腾出来的槽位，避免他被静默挤下阵
+        if displaced and displaced.id ~= id and fromKind then
+            loadout:Equip(fromKind, fromIndex, displaced.id)
+        end
+    end
+
+    selectedId = id
+    Refresh()
+end
+
+---打开随从升级界面，并让它直接停在当前选中的随从上
+local function OnUpgradeButtonClicked()
+    local windowGo = CS.UnityEngine.GameObject.Find("ServantUpgradeWindow")
+    if not windowGo then
+        error("[ServantWindow] 找不到 ServantUpgradeWindow")
+    end
+    local lb = windowGo:GetComponent(typeof(CS.LuaBehaviour))
+    if not lb then
+        error("[ServantWindow] ServantUpgradeWindow 缺少 LuaBehaviour")
+    end
+    if not lb.scriptEnv then
+        error("[ServantWindow] ServantUpgradeWindow 的 Lua scriptEnv 未初始化")
+    end
+    lb.scriptEnv.Show(selectedId)
+end
+
+local function LoadItemPrefab()
+    local prefab = CS.UnityEngine.Resources.Load("Prefabs/ServantSlot", typeof(CS.UnityEngine.GameObject))
+    if not prefab then
+        error("[ServantWindow] 找不到 Prefabs/ServantSlot")
+    end
+    return prefab
+end
+
+---@param servant Servant
+---@param prefab CS.UnityEngine.GameObject
+local function CreateListItem(servant, prefab)
+    local go = CS.UnityEngine.Object.Instantiate(prefab, listContainer)
+    go.name = "ServantSlot_" .. servant.id
+
+    local button = go:GetComponent(typeof(CS.UnityEngine.UI.Button))
+    if not button then
+        error("[ServantWindow] ServantSlot 缺少 Button: " .. servant.id)
+    end
+    local image = go:GetComponent(typeof(CS.UnityEngine.UI.Image))
+    if not image then
+        error("[ServantWindow] ServantSlot 缺少 Image: " .. servant.id)
+    end
+
+    local id = servant.id
+    button.onClick:AddListener(function() OnItemClicked(id) end)
+
+    local t = go.transform
+    listItems[id] = {
+        go = go,
+        image = image,
+        baseColor = CaptureColor(image),
+        portrait = GetOrAddImage(SafeFindChild(t, "Potrait")),
+        nameText = SafeFindChild(t, "Name", typeof(CS.TMPro.TextMeshProUGUI)),
+        levelText = SafeFindChild(t, "Level", typeof(CS.TMPro.TextMeshProUGUI)),
+        occupyText = SafeFindChild(t, "Occupy", typeof(CS.TMPro.TextMeshProUGUI)),
+    }
+end
+
+local function BuildList()
+    if listBuilt then return end
+
+    local prefab = LoadItemPrefab()
+    for _, servant in ipairs(GetLoadout():GetOwned()) do
+        CreateListItem(servant, prefab)
+    end
+    listBuilt = true
+end
+
+function Refresh()
+    local loadout = GetLoadout()
+    local Servants = require("Gameplay.Entities.Servants.Servants")
+
+    --- 主/副槽位
+    for kind, entries in pairs(slotEntries) do
+        for index, entry in ipairs(entries) do
+            local servant = loadout:Get(kind, index)
+            local pending = IsPending(kind, index)
+
+            if servant then
+                SetPortrait(entry.portrait, servant.id)
+                entry.nameText.text = servant.name
+                entry.levelText.text = "Lv." .. loadout:GetLevel(servant.id)
+                entry.portrait.gameObject:SetActive(true)
+                entry.levelText.gameObject:SetActive(true)
+                entry.empty.gameObject:SetActive(false)
+            else
+                entry.nameText.text = pending and "选择随从" or "空位"
+                entry.portrait.gameObject:SetActive(false)
+                entry.levelText.gameObject:SetActive(false)
+                entry.empty.gameObject:SetActive(true)
+            end
+            entry.nameText.gameObject:SetActive(true)
+
+            if pending then
+                ApplyColor(entry.image, servant and ColWarn or ColHighlight)
+            else
+                ApplyColor(entry.image, entry.baseColor)
+            end
+        end
+    end
+
+    --- 随从列表
+    for id, entry in pairs(listItems) do
+        local servant = Servants[id]
+        if servant then
+            SetPortrait(entry.portrait, id)
+            entry.nameText.text = servant.name
+            entry.levelText.text = "Lv." .. loadout:GetLevel(id)
+            entry.occupyText.text = OccupyLabel(loadout, id)
+        end
+        ApplyColor(entry.image, id == selectedId and ColHighlight or entry.baseColor)
+    end
+
+    --- 详情面板
+    local selected = selectedId and Servants[selectedId] or nil
+
+    if selected then
+        detailText.text = DescribeServant(selected)
+        SetPortrait(detailPortrait, selectedId)
+        detailPortrait.gameObject:SetActive(true)
+    else
+        detailPortrait.gameObject:SetActive(false)
+    end
+end
+
+---随从解锁/上下阵/升级都会触发 ServantLoadoutChanged。
+---BuildList 一次性建完就 listBuilt=true 不再重建，所以这里要为新解锁的随从增量补卡。
+local function OnLoadoutChanged()
+    if not listBuilt then return end
+
+    local prefab = nil
+    for _, servant in ipairs(GetLoadout():GetOwned()) do
+        if not listItems[servant.id] then
+            prefab = prefab or LoadItemPrefab()
+            CreateListItem(servant, prefab)
+        end
+    end
+    Refresh()
+end
+
+function Awake()
+    local viewport = SafeFind("Background/WindowPanel/ScrollView/Viewport")
+    listContainer = viewport:Find("Content") or viewport
+    detailText = SafeFind("Background/WindowPanel/DetailCard/Detail", typeof(CS.TMPro.TextMeshProUGUI))
+    detailPortrait = GetOrAddImage(SafeFind("Background/WindowPanel/DetailCard/Potrait"))
+
+    local closeButton = SafeFind("Background/WindowPanel/TopBar/CloseButton", typeof(CS.UnityEngine.UI.Button))
+    closeButton.onClick:AddListener(Hide)
+
+    local upgradeButton = SafeFind("Background/WindowPanel/DetailCard/UpgradeButton", typeof(CS.UnityEngine.UI.Button))
+    --- 改名为唯一名字，避免和 ServantUpgradeWindow 里的 UpgradeButton 混淆
+    upgradeButton.gameObject.name = "ServantUpgradeButton"
+    upgradeButton.onClick:AddListener(OnUpgradeButtonClicked)
+
+    local function BindSlots(kind, parentName, count)
+        for index = 1, count do
+            local slotPath = string.format("Background/WindowPanel/SlotsPanel/%s/SlotMain%d", parentName, index)
+            local button = SafeFind(slotPath, typeof(CS.UnityEngine.UI.Button))
+            local image = button:GetComponent(typeof(CS.UnityEngine.UI.Image))
+            if not image then
+                error("[ServantWindow] 槽位缺少 Image: " .. slotPath)
+            end
+            local t = button.transform
+            slotEntries[kind][index] = {
+                button = button,
+                image = image,
+                baseColor = CaptureColor(image),
+                portrait = GetOrAddImage(SafeFindChild(t, "Potrait")),
+                nameText = SafeFindChild(t, "Name", typeof(CS.TMPro.TextMeshProUGUI)),
+                levelText = SafeFindChild(t, "Level", typeof(CS.TMPro.TextMeshProUGUI)),
+                empty = SafeFindChild(t, "Empty"),
+            }
+            button.onClick:AddListener(function() OnSlotClicked(kind, index) end)
+        end
+    end
+
+    BindSlots("main", "MainSlots", 3)
+    BindSlots("sub", "SubSlots", 5)
+
+    EventSystem:RegisterListener(EventType.ServantLoadoutChanged, nil, nil, OnLoadoutChanged)
+end
+
+function Start()
+    self:GetComponent(typeof(CS.UnityEngine.Canvas)).enabled = false
+end
+
+function Show()
+    self:GetComponent(typeof(CS.UnityEngine.Canvas)).enabled = true
+
+    --- 场景里 Background 可能被手关掉，打开时确保激活
+    local background = self.transform:Find("Background")
+    if background then
+        background.gameObject:SetActive(true)
+    end
+
+    BuildList()
+    --- 每次打开都从干净状态开始，不残留上次的待操作槽位
+    pendingKind, pendingIndex = nil, nil
+    if not selectedId then
+        local owned = GetLoadout():GetOwned()
+        if owned[1] then
+            selectedId = owned[1].id
+        end
+    end
+    Refresh()
+end
+
+function Hide()
+    self:GetComponent(typeof(CS.UnityEngine.Canvas)).enabled = false
+end

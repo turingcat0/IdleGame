@@ -1,0 +1,108 @@
+local Object      = require("Utils.classic")
+local EventSystem = require("Event.EventSystem")
+local EventType   = require("Event.EventType")
+
+---@class CombatStatsTracker 战斗效果统计器
+---@field stats CombatStats
+local CombatStatsTracker = Object:extend()
+
+---@class CombatStats
+---@field effectsAdded table<string, number>  按效果类型统计施加次数
+---@field effectsRemoved table<string, number> 按效果类型统计移除次数
+---@field effectStackChanges number 叠层变化总次数
+---@field effectDamageDealt number 效果造成的总伤害
+---@field effectDamageAbsorbed number 效果吸收的总伤害
+
+function CombatStatsTracker:New()
+    self.stats = self:CreateEmptyStats()
+    self.careerStats = self:CreateEmptyStats()
+    return self
+end
+
+---@return CombatStats
+function CombatStatsTracker:CreateEmptyStats()
+    return {
+        effectsAdded = {},
+        effectsRemoved = {},
+        effectStackChanges = 0,
+        effectDamageDealt = 0,
+        effectDamageAbsorbed = 0,
+    }
+end
+
+---@param player Player
+function CombatStatsTracker:Init(player)
+    self.player = player
+
+    EventSystem:RegisterListener(EventType.EffectAdded, nil, self, CombatStatsTracker.OnEffectAdded)
+    EventSystem:RegisterListener(EventType.EffectRemoved, nil, self, CombatStatsTracker.OnEffectRemoved)
+    EventSystem:RegisterListener(EventType.EffectStackChanged, nil, self, CombatStatsTracker.OnEffectStackChanged)
+    EventSystem:RegisterListener(EventType.EffectDamageDealt, nil, self, CombatStatsTracker.OnEffectDamageDealt)
+    EventSystem:RegisterListener(EventType.EffectDamageAbsorbed, nil, self, CombatStatsTracker.OnEffectDamageAbsorbed)
+end
+
+---重置本局统计（新关卡/新会话时调用）；生涯统计不受影响
+function CombatStatsTracker:Reset()
+    self.stats = self:CreateEmptyStats()
+end
+
+---@return CombatStats 本局统计
+function CombatStatsTracker:GetStats()
+    return self.stats
+end
+
+---@return CombatStats 生涯统计
+function CombatStatsTracker:GetCareerStats()
+    return self.careerStats
+end
+
+---从存档载入生涯统计（读档时由 MetaSave.Apply 调用）
+---@param data table
+function CombatStatsTracker:LoadCareerStats(data)
+    self.careerStats = {
+        effectsAdded = data.effectsAdded or {},
+        effectsRemoved = data.effectsRemoved or {},
+        effectStackChanges = tonumber(data.effectStackChanges) or 0,
+        effectDamageDealt = tonumber(data.effectDamageDealt) or 0,
+        effectDamageAbsorbed = tonumber(data.effectDamageAbsorbed) or 0,
+    }
+end
+
+---@param effectInstance EffectInstance
+function CombatStatsTracker:OnEffectAdded(effectInstance)
+    local effectType = effectInstance.definition.type
+    self.stats.effectsAdded[effectType] = (self.stats.effectsAdded[effectType] or 0) + 1
+    self.careerStats.effectsAdded[effectType] = (self.careerStats.effectsAdded[effectType] or 0) + 1
+end
+
+---@param effectInstance EffectInstance
+function CombatStatsTracker:OnEffectRemoved(effectInstance)
+    local effectType = effectInstance.definition.type
+    self.stats.effectsRemoved[effectType] = (self.stats.effectsRemoved[effectType] or 0) + 1
+    self.careerStats.effectsRemoved[effectType] = (self.careerStats.effectsRemoved[effectType] or 0) + 1
+end
+
+---@param effectInstance EffectInstance
+---@param oldStacks number
+---@param newStacks number
+function CombatStatsTracker:OnEffectStackChanged(effectInstance, oldStacks, newStacks)
+    self.stats.effectStackChanges = self.stats.effectStackChanges + 1
+    self.careerStats.effectStackChanges = self.careerStats.effectStackChanges + 1
+end
+
+---@param target Entity
+---@param definition EffectDefinition
+---@param amount number
+function CombatStatsTracker:OnEffectDamageDealt(target, definition, amount)
+    self.stats.effectDamageDealt = self.stats.effectDamageDealt + amount
+    self.careerStats.effectDamageDealt = self.careerStats.effectDamageDealt + amount
+end
+
+---@param definition EffectDefinition
+---@param amount number
+function CombatStatsTracker:OnEffectDamageAbsorbed(definition, amount)
+    self.stats.effectDamageAbsorbed = self.stats.effectDamageAbsorbed + amount
+    self.careerStats.effectDamageAbsorbed = self.careerStats.effectDamageAbsorbed + amount
+end
+
+return CombatStatsTracker

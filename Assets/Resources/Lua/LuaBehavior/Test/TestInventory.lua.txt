@@ -1,0 +1,37 @@
+require("LuaPanda").start("127.0.0.1",8818)
+---@type Player Description
+local player = require("GameManager").player
+local Items = require("Gameplay.Items.Items")
+local ItemInstance = require("Gameplay.Items.ItemInstance")
+
+local timer = 0
+local interval = 300
+local items = {
+    Items["iron_sword"],
+    Items["iron_shield"],
+    Items["iron_helmet"],
+    Items["iron_chestplate"],
+    Items["iron_leggings"],
+    Items["iron_boots"],
+    Items["iron_accessory"],
+    Items["iron_necklace"]
+
+}
+
+function Update()
+    timer = timer + 1
+    if timer >= interval then
+        timer = timer - interval
+        local slot = math.random(1, 8)
+        local filled = math.random() < 0.8
+        local itemInstance = ItemInstance(items[slot], math.random(1, 100))
+
+        player.inventory:TrySetSlot(slot, filled and itemInstance or nil)
+        if filled then
+            --print("Slot "..slot.." set to "..items[slot].name)
+        else
+           -- print("Slot "..slot.." set to nil")
+        end
+    end
+end
+

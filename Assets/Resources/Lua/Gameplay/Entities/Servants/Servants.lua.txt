@@ -1,0 +1,81 @@
+local Servant = require "Gameplay.Entities.Servants.Servant"
+local AttributeType = require "Gameplay.Stats.AttributeType"
+local Skills        = require "Gameplay.Skills.Skills"
+local Attribute = require("Gameplay.Stats.Attribute")
+local ServantConfigs = require("Config.Generated.Servants")
+
+---@class Servants 随从原型表
+local Servants = {
+    servants = {}
+}
+
+
+---
+---@param id string
+---@param name string
+---@param attack number
+---@param defense number
+---@param speed number
+---@param maxHealth number
+---@param maxMana number
+---@param normalSkill Skill
+---@param combatSkill Skill
+---@param passiveId string?
+---@param auraId string?
+---@param maxLevel integer?
+---@param attackGrowth number?
+---@param defenseGrowth number?
+---@param maxHealthGrowth number?
+---@param maxManaGrowth number?
+---@param speedGrowth number?
+---@param lifesteal number? 命中回复比例，乘以实际伤害回血
+---@param lifestealGrowth number?
+---@param upgradeBaseCost integer?
+---@return Servant
+function Servants:Register(id, name, attack, defense, speed, maxHealth, maxMana, normalSkill, combatSkill, passiveId, auraId, maxLevel, attackGrowth, defenseGrowth, maxHealthGrowth, maxManaGrowth, speedGrowth, lifesteal, lifestealGrowth, upgradeBaseCost)
+    local attributes = {}
+    attributes[AttributeType.Attack] = Attribute(attack)
+    attributes[AttributeType.Defense] = Attribute(defense)
+    attributes[AttributeType.Speed] = Attribute(speed)
+    attributes[AttributeType.MaxHealth] = Attribute(maxHealth)
+    attributes[AttributeType.MaxMana] = Attribute(maxMana)
+    attributes[AttributeType.Lifesteal] = Attribute(lifesteal or 0)
+    local growth = {
+        [AttributeType.Attack] = attackGrowth or 0,
+        [AttributeType.Defense] = defenseGrowth or 0,
+        [AttributeType.MaxHealth] = maxHealthGrowth or 0,
+        [AttributeType.MaxMana] = maxManaGrowth or 0,
+        [AttributeType.Speed] = speedGrowth or 0,
+        [AttributeType.Lifesteal] = lifestealGrowth or 0,
+    }
+    local servant = Servant(id, name, attributes, normalSkill, combatSkill, passiveId, auraId, maxLevel, growth, upgradeBaseCost)
+    table.insert(self.servants, servant)
+    return servant
+end
+
+for id, config in pairs(ServantConfigs) do
+    Servants[id] = Servants:Register(
+        id,
+        config.name,
+        config.attack,
+        config.defense,
+        config.speed,
+        config.maxHealth,
+        config.maxMana,
+        Skills[config.normalSkillId],
+        Skills[config.combatSkillId],
+        config.passiveId,
+        config.auraId,
+        config.maxLevel,
+        config.attackGrowth,
+        config.defenseGrowth,
+        config.maxHealthGrowth,
+        config.maxManaGrowth,
+        config.speedGrowth,
+        config.lifesteal,
+        config.lifestealGrowth,
+        config.upgradeBaseCost
+    )
+end
+
+return Servants

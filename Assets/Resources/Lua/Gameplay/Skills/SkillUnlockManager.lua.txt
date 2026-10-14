@@ -1,0 +1,89 @@
+local Object = require("Utils.classic")
+local Skills = require("Gameplay.Skills.Skills")
+local SkillType = require("Gameplay.Skills.SkillType")
+local EventSystem = require("Event.EventSystem")
+local EventType = require("Event.EventType")
+local SlotConfig = require("Config.SkillSlotConfig")
+
+---@class SkillUnlockManager 管理玩家技能的解锁状态与 Signature 槽位数量
+---@field player Player
+---@field unlockedSkills table<string, Skill> skillId -> Skill（当前已解锁）
+---@field signatureSlotCount integer 当前可用的 Signature 槽位数
+local SkillUnlockManager = Object:extend()
+
+--- 玩家技能 id 前缀，用于从 Skills 注册表里筛出玩家技能
+local PLAYER_SKILL_PREFIX = "player_"
+
+---@param player Player
+function SkillUnlockManager:New(player)
+    self.player = player
+    self.unlockedSkills = {}
+    self.signatureSlotCount = 1
+    self:Recompute()
+    EventSystem:RegisterLevelChangedListener(player, self, SkillUnlockManager.OnLevelChanged)
+end
+
+---根据当前等级重新计算解锁状态
+function SkillUnlockManager:Recompute()
+    local level = self.player.progression.level
+    self.unlockedSkills = {}
+    for id, skill in pairs(Skills.skills) do
+        if id:sub(1, #PLAYER_SKILL_PREFIX) == PLAYER_SKILL_PREFIX then
+            if (skill.unlockLevel or 1) <= level then
+                self.unlockedSkills[id] = skill
+            end
+        end
+    end
+    -- Signature 槽位数：取最后一个 level <= 当前等级 的条目
+    self.signatureSlotCount = 1
+    for _, entry in ipairs(SlotConfig) do
+        if level >= entry.level then
+            self.signatureSlotCount = entry.signatureSlots
+        end
+    end
+end
+
+---等级变化时重新计算，并通知新解锁的技能
+---@param oldLevel integer
+---@param newLevel integer
+function SkillUnlockManager:OnLevelChanged(oldLevel, newLevel)
+    local previouslyUnlocked = {}
+    for id, _ in pairs(self.unlockedSkills) do
+        previouslyUnlocked[id] = true
+    end
+    self:Recompute()
+    for id, skill in pairs(self.unlockedSkills) do
+        if not previouslyUnlocked[id] then
+            EventSystem:FireEvent(EventType.SkillUnlocked, self.player, skill)
+        end
+    end
+end
+
+---获取已解锁的指定类型技能列表（按解锁等级排序）
+---@param skillType SkillType
+---@return Skill[]
+function SkillUnlockManager:GetUnlockedByType(skillType)
+    local result = {}
+    for _, skill in pairs(self.unlockedSkills) do
+        if skill.skillType == skillType then
+            table.insert(result, skill)
+        end
+    end
+    table.sort(result, function(a, b) return a.unlockLevel < b.unlockLevel end)
+    return result
+end
+
+---判断指定技能是否已解锁
+---@param skillId string
+---@return boolean
+function SkillUnlockManager:IsUnlocked(skillId)
+    return self.unlockedSkills[skillId] ~= nil
+end
+
+---获取当前 Signature 槽位数量
+---@return integer
+function SkillUnlockManager:GetSignatureSlotCount()
+    return self.signatureSlotCount
+end
+
+return SkillUnlockManager

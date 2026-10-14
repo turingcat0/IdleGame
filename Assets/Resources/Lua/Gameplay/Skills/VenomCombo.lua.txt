@@ -1,0 +1,25 @@
+local Skill = require("Gameplay.Skills.Skill")
+local AttributeType = require("Gameplay.Stats.AttributeType")
+local EffectTypes = require("Config.Generated.EffectTypes")
+local EffectFactory = require("Gameplay.Effects.EffectFactory")
+
+---@class VenomCombo : Skill
+---连击：命中时给目标上毒（攻击力 10% DPS，5秒）
+local VenomCombo = Skill:extend()
+
+function VenomCombo:OnCast(source, target)
+end
+
+---@param source Entity
+---@param target Entity
+---@param ctx DamageContext
+function VenomCombo:OnHit(source, target, ctx)
+    if not target then return end
+    local attackAttr = source.attributes and source.attributes[AttributeType.Attack]
+    local attack = attackAttr and attackAttr:GetFinalValue() or 100
+    local dps = attack * 0.1
+    local instance = EffectFactory.CreateInstance(EffectTypes.poison, target, source, 5, { dps = dps })
+    target:AddEffect(instance)
+end
+
+return VenomCombo

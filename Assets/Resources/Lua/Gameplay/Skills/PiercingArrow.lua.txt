@@ -1,0 +1,21 @@
+local Skill = require("Gameplay.Skills.Skill")
+local EffectTypes = require("Config.Generated.EffectTypes")
+local EffectFactory = require("Gameplay.Effects.EffectFactory")
+
+---@class PiercingArrow : Skill
+---穿透箭：命中时降低目标攻击（30%，4秒）
+local PiercingArrow = Skill:extend()
+
+function PiercingArrow:OnCast(source, target)
+end
+
+---@param source Entity
+---@param target Entity
+---@param ctx DamageContext
+function PiercingArrow:OnHit(source, target, ctx)
+    if not target then return end
+    local instance = EffectFactory.CreateInstance(EffectTypes.attack_down, target, source, 4, { value = -0.3 })
+    target:AddEffect(instance)
+end
+
+return PiercingArrow
